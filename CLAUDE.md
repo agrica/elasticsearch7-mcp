@@ -52,21 +52,19 @@ not to npmjs.com. Two consequences that bite:
 handshake into it.
 
 `.github/workflows/release.yml` triggers on a `v*` tag push and does the release:
-three guards, then publish, then a GitHub Release whose notes are the matching
-`## [x.y.z]` section of `CHANGELOG.md`. The guards refuse to publish when the package
-scope does not match the repository owner, when the tag disagrees with `package.json`,
-or when the hardcoded `McpServer` version in `src/server.ts` disagrees with
-`package.json` — that last one is the drift this repo has had before. Running the
-workflow manually (`workflow_dispatch`) rehearses everything as a dry run.
+three guards, then publish, then a GitHub Release whose notes GitHub generates from
+the commits and pull requests since the previous tag. **There is no `CHANGELOG.md`**
+— release notes come from commit messages, so write them as the changelog. The guards
+refuse to publish when the package scope does not match the repository owner, when the
+tag disagrees with `package.json`, or when the hardcoded `McpServer` version in
+`src/server.ts` disagrees with `package.json` — that last one is the drift this repo has
+had before. Running the workflow manually (`workflow_dispatch`) rehearses everything as
+a dry run.
 
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
 `src/server.ts` (currently `0.1.0` in both — the release guard fails if they diverge),
-add a `## [x.y.z]` section to `CHANGELOG.md`, commit, then
-`git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers publication;
-no extra secret is needed.
-
-Note that `CHANGELOG.md` numbering restarted at **0.1.0**: the `1.0.x` sections below it
-are the upstream project's history, not ancestors of this version.
+commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
+publication; no extra secret is needed.
 
 ## Elasticsearch version: 7.x, deliberately
 

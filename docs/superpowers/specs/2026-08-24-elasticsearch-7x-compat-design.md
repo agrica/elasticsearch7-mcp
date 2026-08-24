@@ -89,7 +89,8 @@ reste à vérifier par l'exploitant via ce script.
 ### Documentation
 
 `README.md`, `README.zh-CN.md` (cible 7.x, nouveau nom `npx`, renvoi vers l'amont
-pour ES 8, retrait du badge Smithery amont), `CHANGELOG.md`, `smithery.yaml`
+pour ES 8, retrait du badge Smithery amont), `CHANGELOG.md` (depuis supprimé :
+les notes de release sont générées par GitHub), `smithery.yaml`
 (description), `CLAUDE.md` (faits client, contrat `.body`, `ssl`, `docs.count`).
 `Dockerfile` inchangé.
 
