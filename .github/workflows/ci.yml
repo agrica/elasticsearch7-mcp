@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm must be on PATH before setup-node, or `cache: pnpm` cannot resolve
+      # the store path and the step fails. The version comes from the
+      # `packageManager` field, so it cannot drift from what developers run.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile is the CI half of the contract: a lockfile that
+      # disagrees with package.json fails here instead of resolving to something
+      # nobody tested. --ignore-scripts keeps the `prepare` hook from building
+      # during install; the build below is the step whose failure should be
+      # legible.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # tsc --strict over src, tests and root entry points. vitest transpiles
+      # without type-checking, so this is what keeps the tests type-safe too.
+      - run: pnpm run typecheck
+
+      - run: pnpm run build
+
+      # The suite mocks at the client's Connection layer, so it fails on a wrong
+      # request shape (missing `body` nesting) as well as on a missing `.body`.
+      - run: pnpm test
+
+      # `files: ["dist"]` decides what ships. Failing here beats discovering an
+      # empty tarball after a tag is already pushed.
+      - name: Check the package contents
+        run: pnpm pack --dry-run
+
+  # Built on every CI run so a Dockerfile break surfaces on the pull request,
+  # not on the tag that was supposed to ship it. Nothing is pushed here.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true # into the local daemon, so the next step can run it
+          tags: elasticsearch7-mcp:ci
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Building proves the image compiles; this proves it serves the protocol.
+      # ES_HOST has to be set or the zod schema rejects the config at startup,
+      # but no cluster is contacted: listing tools never touches Elasticsearch.
+      # Closing stdin ends the stdio session, so the container exits on its own.
+      - name: Check the image answers an MCP handshake
+        run: |
+          cat > handshake.jsonl <<'JSONL'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0.0"}}}
+          {"jsonrpc":"2.0","method":"notifications/initialized"}
+          {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+          JSONL
+
+          timeout 60 docker run --rm -i -e ES_HOST=http://localhost:9200 elasticsearch7-mcp:ci < handshake.jsonl > mcp-response.jsonl
+
+          cat mcp-response.jsonl
+          node scripts/check-mcp-tools.mjs mcp-response.jsonl

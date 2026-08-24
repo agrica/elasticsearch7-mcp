@@ -1,0 +1,31 @@
+# Keep the build context small and make the image reproducible from sources
+# only. node_modules matters most: the Dockerfile installs its own with
+# `pnpm install --frozen-lockfile`, and copying a host tree over them would
+# defeat the lockfile. Under pnpm they are symlinks into a store that does not
+# exist inside the image, so copying them would break outright.
+node_modules
+dist
+
+.git
+.github
+.gitignore
+.npmignore
+.nvmrc
+
+# Tests, docs and tooling are not part of the runtime image.
+test
+docs
+scripts
+vitest.config.ts
+tsconfig.test.json
+*.md
+
+# pnpm is the package manager here. Any other lockfile in the context is stale
+# by definition and must not reach the build.
+package-lock.json
+yarn.lock
+
+.DS_Store
+.idea
+.vscode
+*.log

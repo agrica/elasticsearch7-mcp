@@ -1,0 +1,69 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - esHost
+    properties:
+      esHost:
+        type: string
+        description: Your Elasticsearch 7.x instance URL, or several separated by commas (or legacy HOST)
+      esApiKey:
+        type: string
+        description: Your Elasticsearch API key for authentication (or legacy API_KEY)
+      esUsername:
+        type: string
+        description: Elasticsearch username for basic authentication (optional, or
+          legacy USERNAME)
+      esPassword:
+        type: string
+        description: Elasticsearch password for basic authentication (optional, or
+          legacy PASSWORD)
+      esCaCert:
+        type: string
+        description: Path to custom CA certificate for ES SSL/TLS (optional, or legacy
+          CA_CERT)
+      esAdminTools:
+        type: boolean
+        default: false
+        description: Expose the read-only diagnostic tools (shard allocation, cat
+          shards and nodes, index and cluster settings, index stats, task list).
+          Safe in production - they only read - but they enlarge the tool list.
+      esAllowDestructive:
+        type: boolean
+        default: false
+        description: Expose the irreversible tools (delete_index, delete_document,
+          delete_by_query, delete_index_template). Leave false in production.
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => {
+      // Use provided config or fallback to legacy environmental variables names
+      const env = {
+        ES_HOST: config.esHost,
+        ES_API_KEY: config.esApiKey || '',
+        ES_USERNAME: config.esUsername || '',
+        ES_PASSWORD: config.esPassword || '',
+        ES_CA_CERT: config.esCaCert || '',
+        // Absent or anything other than "true"/"1" means off; the server only
+        // registers a gated tool when the flag is explicitly on.
+        ES_ADMIN_TOOLS: config.esAdminTools ? 'true' : 'false',
+        ES_ALLOW_DESTRUCTIVE: config.esAllowDestructive ? 'true' : 'false'
+      };
+      return {
+        command: 'node',
+        args: ['dist/index.js'],
+        env
+      };
+    }
+  exampleConfig:
+    esHost: http://localhost:9200
+    esApiKey: your-api-key-here
+    esUsername: user
+    esPassword: password
+    esCaCert: /path/to/ca.crt
+    esAdminTools: true
+    esAllowDestructive: false

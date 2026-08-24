@@ -1,0 +1,60 @@
+{
+  "name": "@agrica/elasticsearch7-mcp",
+  "version": "0.1.0",
+  "description": "Elasticsearch 7.x MCP Server",
+  "keywords": [
+    "elasticsearch",
+    "elasticsearch7",
+    "search",
+    "mcp",
+    "mcp-server"
+  ],
+  "homepage": "https://github.com/agrica/elasticsearch7-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/agrica/elasticsearch7-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agrica/elasticsearch7-mcp.git"
+  },
+  "license": "MIT",
+  "author": "Simon",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "main": "dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "elasticsearch7-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js",
+    "prepare": "pnpm run build",
+    "watch": "tsc --watch",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "start": "node dist/index.js",
+    "inspector": "pnpm dlx @modelcontextprotocol/inspector node dist/index.js",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "^7.17.14",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@elastic/elasticsearch-mock": "^1.0.0",
+    "@types/node": "^24.13.3",
+    "shx": "0.4.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "module": "dist/index.js"
+}

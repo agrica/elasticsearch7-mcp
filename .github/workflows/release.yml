@@ -1,0 +1,171 @@
+name: Release
+
+# A tag push is the release trigger: it publishes to GitHub Packages and opens a
+# GitHub Release. Run the workflow by hand to rehearse the whole pipeline as a
+# dry run — everything except the upload and the release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub Release
+  packages: write # publish to npm.pkg.github.com
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # registry-url is what makes this step write an .npmrc holding
+      # NODE_AUTH_TOKEN, and point NPM_CONFIG_USERCONFIG at it. That file is
+      # user-level, which is why pnpm expands the token from it — it would refuse
+      # to do so for the project .npmrc committed to this repository.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@agrica'
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # GitHub Packages only accepts a package whose scope is the repository
+      # owner. Without this check the failure is an opaque 403 at upload time.
+      - name: Check the package scope matches the repository owner
+        run: |
+          scope=$(node -p "require('./package.json').name.split('/')[0].replace('@','')")
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          if [ "$scope" != "$owner" ]; then
+            echo "::error::package scope '@$scope' does not match repository owner '$owner'. GitHub Packages will reject this."
+            exit 1
+          fi
+
+      - name: Check the tag matches package.json
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} says $tag but package.json says $pkg. Bump one of them."
+            exit 1
+          fi
+
+      # The McpServer name/version in src/server.ts is hardcoded and has drifted
+      # from package.json before. A release is the moment to catch that.
+      - name: Check the hardcoded McpServer version matches package.json
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          srv=$(node -p "(require('fs').readFileSync('src/server.ts','utf8').match(/new McpServer\(\{[\s\S]*?version:\s*\"([^\"]+)\"/) || [])[1] || ''")
+          if [ "$pkg" != "$srv" ]; then
+            echo "::error::src/server.ts announces version '$srv' but package.json says '$pkg'."
+            exit 1
+          fi
+
+      - run: pnpm run typecheck
+
+      - run: pnpm run build
+
+      # A failing suite must stop a release, not be discovered after publishing.
+      - run: pnpm test
+
+      # --no-git-checks is required, not cosmetic: a tag push checks out a
+      # detached HEAD, and pnpm otherwise refuses to publish from one.
+      - name: Publish to GitHub Packages
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run: dry run only, nothing is uploaded."
+            pnpm publish --dry-run --no-git-checks
+          else
+            pnpm publish --no-git-checks
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract the release notes for this version
+        if: github.event_name == 'push'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          # Stops at the next level-2 heading of any shape, not just `## [x.y.z]`:
+          # CHANGELOG.md also carries a plain `## Upstream history` heading, and
+          # matching only the bracketed form swallowed everything after it.
+          awk -v head="## [$version]" '
+            index($0, head) == 1 { found = 1; print; next }
+            /^## / { if (found) exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG.md section found for $version." > release-notes.md
+            echo "::warning::CHANGELOG.md has no '## [$version]' section; the release notes are a placeholder."
+          fi
+          cat release-notes.md
+
+      - name: Create the GitHub Release
+        if: github.event_name == 'push'
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Kept as its own job, after publish: the npm package is the primary artifact,
+  # and a failed publish must not leave a pushed image behind. The guards in
+  # publish (tag vs package.json, scope vs owner) have already run by here.
+  docker:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is emulated, which is why it is built here and not in CI: a tag is
+      # rare enough to absorb the cost. Rehearse it with a manual run before
+      # tagging — that path builds both platforms and pushes nothing.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      # A repository name may contain uppercase; a registry reference may not.
+      - name: Derive the image reference
+        id: image
+        run: echo "ref=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # From tag v1.2.3: 1.2.3, 1.2 and latest. A manual run matches no semver
+      # pattern and produces only the latest tag, which is never pushed.
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.ref }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Pushed:"
+          else
+            echo "Manual run: built for both platforms, pushed nothing. Would have tagged:"
+          fi
+          echo "${{ steps.meta.outputs.tags }}"
