@@ -46,7 +46,7 @@ not to npmjs.com. Two consequences that bite:
 - Consumers need auth even though the package is public — `npx` returns 401 without an
   `~/.npmrc` carrying a `read:packages` token. `README.md` spells this out.
 
-`.github/workflows/ci.yml` runs on pushes to `master` and on every PR: `pnpm install
+`.github/workflows/ci.yml` runs on pushes to `main` and on every PR: `pnpm install
 --frozen-lockfile --ignore-scripts`, `pnpm run typecheck`, `pnpm run build`,
 `pnpm test`, `pnpm pack --dry-run`, then builds the Docker image and pipes an MCP
 handshake into it.
