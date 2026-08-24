@@ -8,7 +8,7 @@ import { search } from "../tools/search.js";
 import { getClusterHealth } from "../tools/getClusterHealth.js";
 import { createIndex } from "../tools/createIndex.js";
 import { createMapping } from "../tools/createMapping.js";
-import { bulk } from "../tools/bulk.js";
+import { bulk, MAX_BULK_DOCUMENTS } from "../tools/bulk.js";
 import { reindex } from "../tools/reindex.js";
 import { count } from "../tools/count.js";
 import { getDocument } from "../tools/getDocument.js";
@@ -37,17 +37,22 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
     "list_indices",
     {
       title: "List indices",
-      description: "List indices. Returns name, health, status, document count and size in bytes.",
+      description: "List indices, one compact line each: name, health, status, document count and size in bytes. Large results are trimmed and say so.",
       inputSchema: {
         pattern: z
           .string()
           .optional()
           .describe("Elasticsearch wildcard, e.g. `logs-*`. Not a regex. Defaults to `*`."),
+
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Also return the same data as JSON, for parsing rather than reading."),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ pattern }, extra) => {
-      return await listIndices(es(extra), pattern);
+    async ({ pattern, verbose }, extra) => {
+      return await listIndices(es(extra), pattern, verbose);
     }
   );
 
@@ -76,7 +81,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
     "search",
     {
       title: "Search documents",
-      description: "Search one index with a query DSL body. Matching text fields are highlighted. Paging goes inside queryBody (`size`, `from`).",
+      description: "Search one index with a query DSL body. Matching text fields are highlighted. Paging goes inside queryBody (`size`, `from`); `size` is capped at 100 per call, so page with `from` for more.",
       inputSchema: {
         index: z
           .string()
@@ -189,7 +194,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
     "bulk",
     {
       title: "Bulk index documents",
-      description: "Index documents in bulk. The index is refreshed, so they are searchable immediately; per-document failures are reported without failing the call.",
+      description: "Index up to 1000 documents in one call. The index is refreshed by default, so they are searchable immediately; per-document failures are reported without failing the call.",
       inputSchema: {
         index: z
           .string()
@@ -200,17 +205,23 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
         documents: z
           .array(z.record(z.string(), z.any()))
           .min(1, "At least one document is required")
-          .describe("Documents to index"),
-      
+          .max(MAX_BULK_DOCUMENTS, `At most ${MAX_BULK_DOCUMENTS} documents per call`)
+          .describe(`Documents to index, at most ${MAX_BULK_DOCUMENTS}. Send more in successive batches.`),
+
         idField: z
           .string()
           .optional()
-          .describe("Field whose value becomes the document _id. Omit to let Elasticsearch generate ids.")
+          .describe("Field whose value becomes the document _id. Omit to let Elasticsearch generate ids."),
+
+        refresh: z
+          .boolean()
+          .optional()
+          .describe("Defaults to true, making documents searchable at once. Set false when loading many batches: forcing a refresh per batch is the expensive part.")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ index, documents, idField }, extra) => {
-      return await bulk(es(extra), index, documents, idField);
+    async ({ index, documents, idField, refresh }, extra) => {
+      return await bulk(es(extra), index, documents, idField, refresh);
     }
   );
 

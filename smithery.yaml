@@ -26,6 +26,20 @@ startCommand:
         type: string
         description: Path to custom CA certificate for ES SSL/TLS (optional, or legacy
           CA_CERT)
+      esRequestTimeout:
+        type: number
+        default: 30000
+        description: Per-request timeout in milliseconds. Raise it if aggregations
+          over many indices time out.
+      esMaxRetries:
+        type: number
+        default: 3
+        description: Retries per request. 0 disables them.
+      esMaxResultBytes:
+        type: number
+        default: 32768
+        description: Ceiling on one tool result. Past it, detail sections are
+          omitted and the result says so.
       esInstanceLabel:
         type: string
         description: Free-text name of this deployment, e.g. production or staging.
@@ -53,6 +67,11 @@ startCommand:
         ES_PASSWORD: config.esPassword || '',
         ES_CA_CERT: config.esCaCert || '',
         ES_INSTANCE_LABEL: config.esInstanceLabel || '',
+        // Empty string rather than a repeated default: the server's zod schema
+        // owns each default, and duplicating them here is how the two drift.
+        ES_REQUEST_TIMEOUT: config.esRequestTimeout ? String(config.esRequestTimeout) : '',
+        ES_MAX_RETRIES: config.esMaxRetries !== undefined ? String(config.esMaxRetries) : '',
+        ES_MAX_RESULT_BYTES: config.esMaxResultBytes ? String(config.esMaxResultBytes) : '',
         // Absent or anything other than "true"/"1" means off; the server only
         // registers a gated tool when the flag is explicitly on.
         ES_ADMIN_TOOLS: config.esAdminTools ? 'true' : 'false',
@@ -71,5 +90,7 @@ startCommand:
     esPassword: password
     esCaCert: /path/to/ca.crt
     esInstanceLabel: production
+    esRequestTimeout: 60000
+    esMaxResultBytes: 32768
     esAdminTools: true
     esAllowDestructive: false

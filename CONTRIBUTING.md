@@ -71,6 +71,24 @@ node scripts/check-mcp-tools.mjs response.jsonl
 That script asserts the default tool set exactly, in both directions, so it also
 catches a diagnostic or destructive tool leaking into a default deployment.
 
+## Measure what a tool call costs the caller
+
+```bash
+pnpm run build
+pnpm run measure
+```
+
+Reports the bytes one tool result puts into the caller's context, against
+fixtures shaped like a year of daily indices — 365 indices, 2190 shards, 500 log
+hits — plus the `tools/list` payload for each configuration. This is the harness
+behind the figures in `docs/architecture-review-2026-08-24.md`, committed so the
+next review re-runs it instead of rebuilding it.
+
+It found a real defect on its first run: the verbose dump was emitted as one
+fragment, so the byte budget dropped it whole and `verbose` returned 145 bytes
+where a caller had asked for detail. If you change how a tool formats a
+collection, run this before trusting the tests.
+
 ## Tests
 
 ```bash

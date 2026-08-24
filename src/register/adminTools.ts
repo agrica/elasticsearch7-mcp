@@ -65,17 +65,22 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
     "list_shards",
     {
       title: "List shards",
-      description: "Shard-level state: which copies are not STARTED and why, which node holds each, and its size. Index health only gives a colour.",
+      description: "Shard-level state: which copies are not STARTED and why. Index health only gives a colour. Returns a summary; the per-shard detail needs verbose.",
       inputSchema: {
         index: z
           .string()
           .optional()
           .describe("Index or wildcard. Omit for every shard on the cluster."),
+
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Also return every shard as JSON. On a large cluster this is thousands of entries — pass an index with it."),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await listShards(es(extra), index);
+    async ({ index, verbose }, extra) => {
+      return await listShards(es(extra), index, verbose);
     }
   );
 

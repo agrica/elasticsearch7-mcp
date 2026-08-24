@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 155 tests, mocked at the client connection layer
+pnpm test             # vitest run — 168 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -25,6 +25,9 @@ printf '%s' "$HANDSHAKE" | docker run --rm -i -e ES_HOST=http://localhost:9200 e
 
 # Runtime verification against a real 7.x cluster (read-only by default):
 ES_HOST=http://localhost:9200 ES_API_KEY=your-key pnpm run smoke
+
+# What one tool call costs the caller's context, at cluster scale:
+pnpm run build && pnpm run measure
 ES_HOST=http://localhost:9200 node scripts/smoke.mjs --write smoke-test   # also write tools
 
 # Interactive debugging:
@@ -132,6 +135,20 @@ Two things the specification asks for that this server does not do:
 - **No rate limiting.** The specification says servers *MUST* rate limit tool invocations. This is a **knowing deviation**, not an oversight. The server is spawned by, and serves, exactly one local MCP client over stdio: the client is the trust boundary, and a limiter there would throttle the operator rather than an attacker. The real hazard it would address — a `delete_by_query` or a wide `search` issued in a loop against a production cluster — is addressed instead by the registration gating (deletes are absent unless enabled), by `rejectBulkTarget()` (no wildcard target), and by the cluster's own limits. Revisit this if the server ever gains a non-stdio transport, where the caller stops being the operator.
 - **`listChanged: true` is declared but never emitted.** `McpServer` hardcodes it in `registerCapabilities`, so it cannot be turned off through the public API. Harmless here: the tool list is fixed at startup by the environment flags, so there is never a change to notify about.
 
+### Output is budgeted, and that is load-bearing
+
+`src/outputBudget.ts` caps one tool result at `ES_MAX_RESULT_BYTES` (32 KiB by default). This is not tidiness. Measured before it existed: `list_shards` over a year of daily indices returned **385 469 bytes**, about 96 000 tokens, in one result — while the three-tier gating this project is careful about saves 6 058 bytes of *schema*. The tool list was rationed and the tool output was not.
+
+Three rules the helper encodes, each because the alternative was worse:
+
+- **The summary survives, the detail goes.** `budgeted({ summary, detail, hint })` keeps every summary fragment — truncating the last one with a marker if even that overruns — and fills the remainder with detail. A caller that loses the summary has lost the answer.
+- **A trim is always announced,** with a hint saying how to ask a smaller question. Silence is the real hazard: a model handed a shortened list with no notice concludes the entry it wanted does not exist, which is a wrong answer rather than a partial one.
+- **Detail is chunked, never one fragment.** Use `chunkedJson(records)`. The first version emitted the dump as a single fragment, so the budget dropped it whole and `verbose` answered with 145 bytes — a summary and an apology — where the caller had explicitly asked for detail. `scripts/measure-output.mjs` is what caught that.
+
+`test/outputScale.test.ts` holds the ceilings against the same fixtures the figures came from, and `test/support/scaleFixtures.ts` is shared with the measurement script so a number in `docs/architecture-review-2026-08-24.md` can be re-run rather than rebuilt.
+
+`list_indices` and `list_shards` put their JSON behind `verbose` (default off); `search` clamps `size` to `MAX_SEARCH_SIZE` (100) and reports the `from` to page with. `list_nodes` deliberately has no `verbose`: nodes number in the tens, so it was never the hazard, and adding a switch there would have been cargo-culting the fix.
+
 ### The 7.x client API shape
 
 Two rules that differ from the 8.x client and that every tool follows:
@@ -201,6 +218,8 @@ Keep the zod parameter order and the tool function's positional parameter order 
 
 `ES_HOST` (comma-separated for multiple nodes → `nodes[]` for failover/load balancing), `ES_API_KEY`, `ES_USERNAME`/`ES_PASSWORD`, `ES_CA_CERT` (→ `ssl.ca`; the 7.x client calls this option `ssl`, not `tls`). Each has an un-prefixed legacy fallback (`HOST`, `API_KEY`, `USERNAME`, …) kept for backward compatibility. Auth precedence: API key wins; basic auth applies only when *both* username and password are non-empty.
 
+`ES_REQUEST_TIMEOUT`, `ES_MAX_RETRIES` and `ES_MAX_RESULT_BYTES` are numeric. A malformed value is reported to stderr and ignored rather than fatal: refusing to start because `ES_MAX_RETRIES=three` would take the session down over a setting with a sane fallback. `loadConfigFromEnv()` returns `ElasticsearchConfigInput`, not the validated type, precisely so an unset number can come back `undefined` and let zod's `.default()` stay the single place each default is written.
+
 `ES_INSTANCE_LABEL` is free text and purely cosmetic — it becomes `serverInfo.title` (`Elasticsearch 7.x — production`) and is echoed to stderr at startup. It exists because a real `mcpServers` block usually declares this server once per cluster, and without it a client shows two identically named servers. It has no effect on behaviour: do not make anything depend on it, in particular not the destructive gate, which is `ES_ALLOW_DESTRUCTIVE` and nothing else.
 
 `ES_ADMIN_TOOLS` and `ES_ALLOW_DESTRUCTIVE` accept `true` or `1` (case-insensitive, trimmed); anything else, unset included, is off. They deliberately have **no un-prefixed fallback** — an ambient `ADMIN_TOOLS` deciding whether deletes are reachable is exactly the `USERNAME` hazard below, with worse consequences.
@@ -214,6 +233,8 @@ Config is validated lazily: `ConfigSchema.parse()` runs inside `createClientOpti
 - `search` fetches the index mapping first and auto-injects a `highlight` block for every `text` field (`<em>` tags). Highlighted fields are rendered before non-highlighted `_source` fields. `dense_vector` fields are excluded: Elasticsearch cannot highlight a vector. The old condition (`"dense_vector" in fieldData`) tested for a *key* of that name, which no mapping has, so it never matched — the documentation claimed a behaviour the code never had.
 - `bulk` uses `refresh: true`, so imported docs are immediately searchable; per-document failures are reported individually rather than failing the call.
 - `reindex` uses `wait_for_completion: false` and returns a task ID for `GET _tasks/<id>`.
+- **`delete_by_query` does the same, and this is a correctness fix rather than a preference.** Run synchronously it blocked until Elasticsearch finished; past the request timeout it reported `Error: Request timed out` while the cluster carried on deleting — telling the model a destructive operation had failed while it was succeeding, and inviting a retry against a moving target. It returns a task id; the deleted count now lives in the task document, so `get_task` is where it is read. **Surface change:** the result no longer carries a count.
+- `bulk` caps `documents` at `MAX_BULK_DOCUMENTS` (1000) and takes `refresh`, defaulting true. Always-refreshing is right for the small interactive import a model makes — it can verify its own work — and wrong for a bulk load, where forcing a refresh per batch is the expensive part.
 - `create_mapping` creates the index if it doesn't exist, otherwise calls `putMapping`, and always echoes the resulting mapping back. It relies on the 7.x client casting `HEAD` responses to a boolean — `indices.exists<boolean>()` returns `body: false` on 404 instead of throwing. Keep the explicit `<boolean>` generic: without it the response type is `Record<string, any>`, which is always truthy.
 - `get_index_template` passes `{ ignore: [404] }`, so a missing named template yields the "No template found" message instead of an `Error:` fragment. Elasticsearch answers 404 there, not an empty list — without the option that friendly message was unreachable code.
 - `list_indices` passes `pattern` straight to `cat.indices`, so it is an ES **wildcard** (`log-*`), defaulting to `*` — the tool description used to claim regex support, and `test/server.test.ts` now fails if that claim comes back. It requests `bytes: "b"` and reads the dotted keys `docs.count` / `store.size`: the camelCase aliases in `estypes` are type-level only and `undefined` at runtime.

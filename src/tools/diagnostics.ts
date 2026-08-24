@@ -1,5 +1,6 @@
 import { Client, estypes } from "@elastic/elasticsearch";
 import { textFragment, toolError, type ToolResult } from "../toolResult.js";
+import { budgeted, chunkedJson } from "../outputBudget.js";
 
 /**
  * Why a shard is unassigned — the question a red or yellow index actually poses.
@@ -80,7 +81,8 @@ export async function explainAllocation(
  */
 export async function listShards(
   esClient: Client,
-  index?: string
+  index?: string,
+  verbose?: boolean
 ): Promise<ToolResult> {
   try {
     const response = await esClient.cat.shards<
@@ -95,7 +97,7 @@ export async function listShards(
     const shards = response.body;
     const unhealthy = shards.filter((shard) => shard.state !== "STARTED");
 
-    const content: ToolResult["content"] = [
+    const summary: ToolResult["content"] = [
       textFragment(
         `${shards.length} shards, ${unhealthy.length} not STARTED`
       ),
@@ -104,7 +106,7 @@ export async function listShards(
     // Lead with the broken ones: on a large cluster the started shards are
     // noise for whoever is diagnosing.
     if (unhealthy.length > 0) {
-      content.push(
+      summary.push(
         textFragment(
           `Not started:\n${unhealthy
             .map(
@@ -117,9 +119,16 @@ export async function listShards(
       );
     }
 
-    content.push(textFragment(JSON.stringify(shards, null, 2)));
-
-    return { content };
+    // The full dump used to be unconditional, and it is what let one call on a
+    // 2190-shard cluster return 385 KB. The summary above is what a diagnosis
+    // needs; the dump is now asked for.
+    return budgeted({
+      summary,
+      detail: verbose ? chunkedJson(shards) : [],
+      hint: index
+        ? "Set verbose only when the per-shard fields are needed."
+        : "Pass an index to look at one index's shards.",
+    });
   } catch (error) {
     return toolError("List shards failed", error);
   }
@@ -184,8 +193,10 @@ export async function listNodes(esClient: Client): Promise<ToolResult> {
 
     const nodes = response.body;
 
-    return {
-      content: [
+    // No verbose switch here: nodes number in the tens, not the thousands, so
+    // this tool was never the hazard. The budget is a backstop, not a fix.
+    return budgeted({
+      summary: [
         textFragment(`${nodes.length} nodes`),
         textFragment(
           nodes
@@ -198,7 +209,7 @@ export async function listNodes(esClient: Client): Promise<ToolResult> {
             .join("\n")
         ),
       ],
-    };
+    });
   } catch (error) {
     return toolError("List nodes failed", error);
   }

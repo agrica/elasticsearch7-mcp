@@ -5,6 +5,7 @@ import {
   type ElasticsearchConfigInput,
   createClientOptions,
 } from "./config/schema.js";
+import { setResultBudget } from "./outputBudget.js";
 import { registerDataTools } from "./register/dataTools.js";
 import { registerAdminTools } from "./register/adminTools.js";
 import { registerDestructiveTools } from "./register/destructiveTools.js";
@@ -87,6 +88,10 @@ export async function createElasticsearchMcpServer(
   const validated = ConfigSchema.parse(config);
   const esClient = new Client(createClientOptions(validated));
 
+  // Applied before any tool can run. See src/outputBudget.ts for why this is
+  // process state and not an argument on every tool.
+  setResultBudget(validated.maxResultBytes);
+
   // `title` is the display name a client shows. ES_INSTANCE_LABEL goes here so
   // an operator running this server against several clusters — production and
   // staging both declared in one mcpServers block — can tell which is which
@@ -113,6 +118,10 @@ export async function createElasticsearchMcpServer(
   // be able to tell which sets are live without calling tools/list.
   console.error(
     `Instance: ${validated.instanceLabel || "(unlabelled — set ES_INSTANCE_LABEL)"}`
+  );
+  console.error(
+    `Limits: ${validated.requestTimeoutMs}ms per request, ${validated.maxRetries} retries, ` +
+      `${validated.maxResultBytes} bytes per result`
   );
   console.error(
     `Tool sets: data (always) | diagnostics ${

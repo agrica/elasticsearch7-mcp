@@ -116,11 +116,23 @@ describe("list_shards", () => {
 
     expect(text).toContain("2 shards, 1 not STARTED");
     expect(text).toContain("logs-2026[1] r UNASSIGNED — NODE_LEFT");
-    // The broken shards come before the raw dump, so a client that truncates
-    // keeps the part that matters.
-    expect(text.indexOf("Not started:")).toBeLessThan(
-      text.indexOf('"prirep": "p"')
-    );
+    // The raw dump is no longer returned unless asked for: it is what let this
+    // tool answer with 385 KB on a 2190-shard cluster.
+    expect(text).not.toContain('"prirep": "p"');
+  });
+
+  it("returns the raw dump only when verbose is set, after the summary", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_cat/shards" }, [
+      { index: "logs-2026", shard: "0", prirep: "p", state: "STARTED", node: "es-node-1" },
+      { index: "logs-2026", shard: "1", prirep: "r", state: "UNASSIGNED", "unassigned.reason": "NODE_LEFT" },
+    ]);
+
+    const text = textOf(await listShards(client, undefined, true));
+
+    expect(text).toContain('"prirep": "p"');
+    // Order still matters: a client that truncates keeps the part that counts.
+    expect(text.indexOf("Not started:")).toBeLessThan(text.indexOf('"prirep": "p"'));
   });
 
   it("asks for bytes rather than human units", async () => {

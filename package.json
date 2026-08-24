@@ -37,6 +37,7 @@
     "start": "node dist/index.js",
     "inspector": "pnpm dlx @modelcontextprotocol/inspector node dist/index.js",
     "smoke": "node scripts/smoke.mjs",
+    "measure": "node scripts/measure-output.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

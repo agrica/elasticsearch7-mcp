@@ -98,37 +98,41 @@ export async function deleteByQuery(
       return toolRefusal(refusal);
     }
 
-    const response = await esClient.deleteByQuery<
-      estypes.DeleteByQueryResponse
-    >({
+    // wait_for_completion: false, and this is a correctness fix rather than a
+    // performance one. Run synchronously, the call blocked until Elasticsearch
+    // finished; past the client's request timeout it reported
+    // `Error: Request timed out` while the cluster carried on deleting. The
+    // model was told a destructive operation had failed while it was
+    // succeeding — and a model that retries then deletes against a moving
+    // target. `reindex` already worked this way; the most dangerous tool did
+    // not.
+    const response = await esClient.deleteByQuery<{ task?: string }>({
       index,
       refresh: true,
+      wait_for_completion: false,
       body: { query },
     });
 
-    const { deleted, total, version_conflicts, failures } = response.body;
-    const content: ToolResult["content"] = [
-      textFragment(
-        `Deleted ${deleted ?? 0} of ${total ?? 0} matching documents in "${index}".`
-      ),
-    ];
+    const task = response.body.task;
 
-    if (version_conflicts) {
-      content.push(
+    return {
+      content: [
         textFragment(
-          `${version_conflicts} version conflicts: those documents changed while the delete ran and were left alone.`
-        )
-      );
-    }
-
-    if (failures && failures.length > 0) {
-      content.push(
-        textFragment(`Failures: ${JSON.stringify(failures, null, 2)}`)
-      );
-    }
-
-    return { content };
+          task
+            ? `Deletion started on "${index}" as task ${task}. It runs in the background: ` +
+                `call get_task with this id to see progress, how many documents were ` +
+                `deleted, and any failures. Documents are still being removed until it completes.`
+            : `Deletion was accepted for "${index}" but Elasticsearch returned no task id, ` +
+                `so its progress cannot be followed. Check the cluster's task list.`
+        ),
+      ],
+    };
   } catch (error) {
     return toolError("Delete by query failed", error);
   }
 }
+
+// The synchronous branch's formatting — deleted / total / version conflicts /
+// failures — is gone with it. Those counts now live in the task document, so
+// `get_task` is where they are read, and keeping a second renderer here for a
+// response shape this tool no longer receives would be dead code.

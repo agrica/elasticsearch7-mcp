@@ -100,7 +100,7 @@ export function registerDestructiveTools(
     "delete_by_query",
     {
       title: "Delete documents by query",
-      description: "Delete every document a query matches. Irreversible and unbounded: run count with the same query first to see how many would go.",
+      description: "Delete every document a query matches. Irreversible and unbounded: run count with the same query first to see how many would go. Asynchronous — it returns a task id and the deletion continues in the background, so follow it with get_task.",
       inputSchema: {
         index: z
           .string()

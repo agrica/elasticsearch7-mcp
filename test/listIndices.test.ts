@@ -23,12 +23,32 @@ describe("listIndices", () => {
       },
     ]);
 
-    const text = textOf(await listIndices(client));
+    const compact = textOf(await listIndices(client));
 
-    expect(text).toContain("Found 1 indices");
-    expect(text).toContain('"docsCount": "1204"');
-    expect(text).not.toContain('"docsCount": null');
-    expect(text).toContain('"storeSizeBytes": "5242880"');
+    expect(compact).toContain("Found 1 indices");
+    // The default rendering is one compact line per index — 365 daily indices
+    // came to 54 KB as pretty JSON, and this tool's JSON was its only content,
+    // so the size was the answer rather than optional detail.
+    expect(compact).toContain("docs=1204");
+    expect(compact).toContain("bytes=5242880");
+    expect(compact).not.toContain('"docsCount"');
+
+    // verbose brings the parseable form back.
+    const { client: other, mock: otherMock } = createMockedClient();
+    capture(otherMock, { method: "GET", path: "/_cat/indices/*" }, [
+      {
+        index: "logs-2026",
+        health: "green",
+        status: "open",
+        "docs.count": "1204",
+        "store.size": "5242880",
+      },
+    ]);
+    const verbose = textOf(await listIndices(other, undefined, true));
+
+    expect(verbose).toContain('"docsCount": "1204"');
+    expect(verbose).not.toContain('"docsCount": null');
+    expect(verbose).toContain('"storeSizeBytes": "5242880"');
   });
 
   it("defaults the pattern to `*` and forwards a caller's pattern verbatim", async () => {

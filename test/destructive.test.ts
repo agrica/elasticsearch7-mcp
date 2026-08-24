@@ -80,14 +80,13 @@ describe("delete_document", () => {
 });
 
 describe("delete_by_query", () => {
-  it("sends the query in the body and reports what it removed", async () => {
+  it("starts the deletion as a task instead of waiting for it", async () => {
+    // Run synchronously it blocked until Elasticsearch finished, and past the
+    // request timeout it reported a failure while the cluster kept deleting —
+    // telling the model a destructive call had failed while it was succeeding.
     const { client, mock } = createMockedClient();
     const call = capture(mock, { method: "POST", path: "/logs/_delete_by_query" }, {
-      took: 12,
-      deleted: 7,
-      total: 9,
-      version_conflicts: 2,
-      failures: [],
+      task: "node-1:4242",
     });
 
     const text = textOf(
@@ -96,8 +95,11 @@ describe("delete_by_query", () => {
 
     expect(firstRequest(call).body).toEqual({ query: { term: { level: "debug" } } });
     expect(firstRequest(call).querystring.refresh).toBe("true");
-    expect(text).toContain("Deleted 7 of 9");
-    // Version conflicts are silent data left behind: say so.
-    expect(text).toContain("2 version conflicts");
+    expect(firstRequest(call).querystring.wait_for_completion).toBe("false");
+    expect(text).toContain("node-1:4242");
+    // The caller has to know the work is still running, or it reads the index
+    // too early and concludes the delete did nothing.
+    expect(text).toContain("background");
+    expect(text).toContain("get_task");
   });
 });

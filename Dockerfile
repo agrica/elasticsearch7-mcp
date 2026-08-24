@@ -63,6 +63,11 @@ ENV ES_CA_CERT=""
 # Shown as the server title. Worth setting when a client declares more than one
 # instance, so production and staging are not two identically named servers.
 ENV ES_INSTANCE_LABEL=""
+# Left empty so the server's own defaults apply: 30000 ms, 3 retries, and a
+# 32 KB ceiling on one tool result. Repeating the numbers here is how they drift.
+ENV ES_REQUEST_TIMEOUT=""
+ENV ES_MAX_RETRIES=""
+ENV ES_MAX_RESULT_BYTES=""
 # Both tool gates default to off: an image pulled and run with no further
 # thought exposes read-and-search tools only.
 ENV ES_ADMIN_TOOLS="false"

@@ -68,7 +68,7 @@ reach them at all.
 
 * `delete_index`: delete an index and its data
 * `delete_document`: delete one document by id
-* `delete_by_query`: delete every document matching a query
+* `delete_by_query`: delete every document matching a query — **asynchronous**, it returns a task id and the deletion continues in the background
 * `delete_index_template`: delete an index template
 
 Even with the flag on, these refuse a wildcard, a comma-separated list, `*` and
@@ -223,6 +223,9 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 | `ES_USERNAME` | Elasticsearch username for basic authentication (also supports legacy `USERNAME`) | No |
 | `ES_PASSWORD` | Elasticsearch password for basic authentication (also supports legacy `PASSWORD`) | No |
 | `ES_CA_CERT` | Path to custom CA certificate for Elasticsearch SSL/TLS (also supports legacy `CA_CERT`) | No |
+| `ES_REQUEST_TIMEOUT` | Per-request timeout in milliseconds. Default `30000` — raise it if aggregations over many indices time out. | No |
+| `ES_MAX_RETRIES` | Retries per request. Default `3`; `0` disables them. | No |
+| `ES_MAX_RESULT_BYTES` | Ceiling on one tool result. Default `32768`. Past it, detail is omitted and the result says so. | No |
 | `ES_INSTANCE_LABEL` | Free-text name of this deployment, e.g. `production`. Shown as the server title, so several instances declared side by side are distinguishable. | No |
 | `ES_ADMIN_TOOLS` | `true` to also expose the read-only diagnostic tools. Default off. | No |
 | `ES_ALLOW_DESTRUCTIVE` | `true` to also expose the irreversible tools. Default off. | No |
@@ -234,6 +237,23 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 > something that decides whether deletes are reachable.
 >
 > Both accept `true` or `1`; anything else, including an unset variable, means off.
+
+### Result size
+
+A tool result is capped at 32 KB (`ES_MAX_RESULT_BYTES`). This matters on a
+logging cluster: before the cap, one `list_shards` call over a year of daily
+indices returned 385 KB — around 96 000 tokens — in a single answer, which is
+more than most sessions can hold.
+
+When a result is trimmed it says so, says how much went, and says how to ask a
+smaller question. Three tools shape their answers around it:
+
+* `list_indices` and `list_shards` return a readable summary; the parseable JSON
+  is behind `verbose`.
+* `search` caps `size` at 100 per call and tells you the `from` to page with.
+
+Run `pnpm run measure` against the built output to see the current figures for
+your own configuration.
 
 ### Labelling several instances
 

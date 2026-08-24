@@ -1,5 +1,6 @@
 import { Client, estypes } from "@elastic/elasticsearch";
 import { textFragment, toolError, type ToolResult } from "../toolResult.js";
+import { budgeted, chunkedJson } from "../outputBudget.js";
 
 /**
  * List Elasticsearch indices, optionally filtered.
@@ -9,7 +10,8 @@ import { textFragment, toolError, type ToolResult } from "../toolResult.js";
  */
 export async function listIndices(
   esClient: Client,
-  pattern?: string
+  pattern?: string,
+  verbose?: boolean
 ): Promise<ToolResult> {
   try {
     const response = await esClient.cat.indices<
@@ -31,12 +33,39 @@ export async function listIndices(
       storeSizeBytes: index["store.size"],
     }));
 
-    return {
-      content: [
-        textFragment(`Found ${indicesInfo.length} indices`),
-        textFragment(JSON.stringify(indicesInfo, null, 2)),
+    // One line per index rather than pretty-printed JSON. On 365 daily indices
+    // that is the difference between roughly 22 KB and 54 KB, for the same five
+    // facts — and the pretty JSON was the only content this tool returned, so
+    // the size was not optional detail, it was the answer.
+    const lines = indicesInfo
+      .map(
+        (index) =>
+          `${index.index}  ${index.health ?? "?"} ${index.status ?? "?"}  ` +
+          `docs=${index.docsCount ?? "?"}  bytes=${index.storeSizeBytes ?? "?"}`
+      )
+      .join("\n");
+
+    const unhealthy = indicesInfo.filter(
+      (index) => index.health !== "green" && index.health !== undefined
+    );
+
+    return budgeted({
+      summary: [
+        textFragment(
+          `Found ${indicesInfo.length} indices` +
+            (unhealthy.length > 0
+              ? `, ${unhealthy.length} not green: ${unhealthy
+                  .map((index) => `${index.index} (${index.health})`)
+                  .join(", ")}`
+              : "")
+        ),
+        textFragment(lines),
       ],
-    };
+      // The raw JSON is a superset of the lines above, so it is detail: worth
+      // having when a caller wants to parse it, first to go when space runs out.
+      detail: verbose ? chunkedJson(indicesInfo) : [],
+      hint: "Narrow `pattern` (e.g. `logs-2026.08.*`) to see fewer indices.",
+    });
   } catch (error) {
     return toolError("Failed to list indices", error);
   }

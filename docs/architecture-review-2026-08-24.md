@@ -3,6 +3,12 @@
 24 August 2026, against commit `e494a32`. Every number below was measured, not
 estimated; the method is given with each one so it can be re-run.
 
+> **Status.** Phases 1 and 2 are implemented. The findings below describe the
+> state at `e494a32` and are kept as written — a review edited to match the code
+> stops being a record of what was wrong. `pnpm run measure` reports the current
+> figures; `test/outputScale.test.ts` holds the ceilings. Phases 3 to 5 are
+> outstanding, and Phase 3 item 10 still needs the decision it names.
+
 ## The finding that reframes the rest
 
 This server spends real design effort on the calling model's context budget. Tools
