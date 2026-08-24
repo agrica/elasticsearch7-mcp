@@ -113,7 +113,8 @@ Every example below sets `ES_HOST` and `ES_API_KEY`. Swap in
 `ES_USERNAME`/`ES_PASSWORD` for basic auth, and add `ES_ADMIN_TOOLS=true` to get
 the diagnostic tools — see [Configuration Options](#configuration-options).
 
-#### Claude Code
+<details open>
+<summary><strong>Claude Code</strong> — <code>claude mcp add</code></summary>
 
 ```bash
 claude mcp add elasticsearch7 \
@@ -138,7 +139,10 @@ The server is added at local scope, so it loads in the current project only. Add
 `.mcp.json` and share it with your team — mind that a committed `.mcp.json`
 would carry your API key, so prefer user scope for credentials.
 
-#### Claude Desktop
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
 
 Edit `claude_desktop_config.json` — **Settings > Developer > Edit Config** opens
 it, or find it at `%APPDATA%\Claude\` on Windows and
@@ -162,7 +166,10 @@ it, or find it at `%APPDATA%\Claude\` on Windows and
 
 Restart Claude Desktop afterwards; it only reads that file at startup.
 
-#### Codex
+</details>
+
+<details>
+<summary><strong>Codex</strong> — <code>codex mcp add</code> or <code>config.toml</code></summary>
 
 ```bash
 codex mcp add elasticsearch7 \
@@ -188,13 +195,18 @@ ES_ADMIN_TOOLS = "true"
 
 `/mcp` inside Codex confirms the server is loaded.
 
-#### Any other MCP client
+</details>
+
+<details>
+<summary><strong>Any other MCP client</strong> — stdio, no port</summary>
 
 The server is a plain stdio MCP server, so anything on the
 [MCP client list](https://modelcontextprotocol.io/clients) works. It needs three
 things: the command `npx`, the arguments `-y @agrica/elasticsearch7-mcp`, and the
 `ES_*` variables in its environment. It never listens on a port, and writes
 nothing but MCP protocol to stdout — diagnostics go to stderr.
+
+</details>
 
 ### Configuration Options
 
