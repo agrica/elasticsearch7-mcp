@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClientOptions, loadConfigFromEnv } from "../src/config/schema.js";
+import { ConfigSchema, createClientOptions, loadConfigFromEnv } from "../src/config/schema.js";
 
 describe("createClientOptions", () => {
   it("maps every URL onto `nodes` for failover and load balancing", () => {
@@ -40,6 +40,98 @@ describe("createClientOptions", () => {
       password: "",
     });
     expect(usernameOnly.auth).toBeUndefined();
+  });
+
+  it("leaves the base client with no auth at all when OAuth2 is configured", () => {
+    // The safety property: if the bearer path breaks, the request must fail with
+    // a 401 rather than quietly succeeding as whatever identity ES_API_KEY
+    // names. A silent substitution of identity is worse than an outage.
+    const options = createClientOptions({
+      urls: ["http://a:9200"],
+      apiKey: "secret-key",
+      username: "elastic",
+      password: "hunter2",
+      oauth: {
+        tokenUrl: "https://idp.example.test/token",
+        clientId: "mcp",
+        clientSecret: "s3cr3t",
+      },
+    });
+
+    expect(options.auth).toBeUndefined();
+  });
+
+  it("refuses a token endpoint that would send the secret in the clear", () => {
+    const insecure = () =>
+      createClientOptions({
+        urls: ["http://a:9200"],
+        oauth: {
+          tokenUrl: "http://idp.example.test/token",
+          clientId: "mcp",
+          clientSecret: "s3cr3t",
+        },
+      });
+
+    expect(insecure).toThrow(/https/i);
+  });
+
+  it("allows a loopback token endpoint over plain HTTP, for local providers", () => {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      const options = createClientOptions({
+        urls: ["http://a:9200"],
+        oauth: {
+          tokenUrl: `http://${host}:8080/token`,
+          clientId: "mcp",
+          clientSecret: "s3cr3t",
+        },
+      });
+
+      expect(options.auth, `${host} must be accepted`).toBeUndefined();
+    }
+  });
+
+  it("refuses a half-configured OAuth2 block instead of falling back", () => {
+    // The whole point: an operator who forgot the secret must be told, not
+    // silently connected as the API key identity.
+    const partial = () =>
+      createClientOptions({
+        urls: ["http://a:9200"],
+        apiKey: "secret-key",
+        oauth: {
+          tokenUrl: "https://idp.example.test/token",
+          clientId: "mcp",
+          clientSecret: "",
+        },
+      });
+
+    expect(partial).toThrow(/ES_OAUTH_CLIENT_SECRET/);
+  });
+
+  it("defaults the client authentication style to post", () => {
+    const { oauth } = ConfigSchema.parse({
+      urls: ["http://a:9200"],
+      oauth: {
+        tokenUrl: "https://idp.example.test/token",
+        clientId: "mcp",
+        clientSecret: "s3cr3t",
+      },
+    });
+
+    expect(oauth?.authStyle).toBe("post");
+  });
+
+  it("refuses an authentication style that is neither post nor basic", () => {
+    expect(() =>
+      ConfigSchema.parse({
+        urls: ["http://a:9200"],
+        oauth: {
+          tokenUrl: "https://idp.example.test/token",
+          clientId: "mcp",
+          clientSecret: "s3cr3t",
+          authStyle: "jwt" as "post",
+        },
+      })
+    ).toThrow();
   });
 
   it("reads a CA certificate into the `ssl` option — the 7.x name, not `tls`", () => {
@@ -81,6 +173,13 @@ describe("loadConfigFromEnv", () => {
     "ES_CA_CERT", "CA_CERT",
     "ES_ADMIN_TOOLS", "ADMIN_TOOLS",
     "ES_ALLOW_DESTRUCTIVE", "ALLOW_DESTRUCTIVE",
+    "ES_OAUTH_TOKEN_URL", "OAUTH_TOKEN_URL",
+    "ES_OAUTH_CLIENT_ID", "OAUTH_CLIENT_ID", "CLIENT_ID",
+    "ES_OAUTH_CLIENT_SECRET", "OAUTH_CLIENT_SECRET", "CLIENT_SECRET",
+    "ES_OAUTH_CLIENT_SECRET_FILE",
+    "ES_OAUTH_SCOPE", "SCOPE",
+    "ES_OAUTH_AUDIENCE", "AUDIENCE",
+    "ES_OAUTH_AUTH_STYLE",
   ];
   let saved: Record<string, string | undefined>;
 
@@ -162,6 +261,80 @@ describe("loadConfigFromEnv", () => {
 
     expect(config.adminTools).toBe(false);
     expect(config.allowDestructive).toBe(false);
+  });
+
+  it("reads the OAuth2 block, trimming a secret pasted with a newline", () => {
+    // Claude Code warns about exactly this: a token pasted into an mcpServers
+    // block arrives with a trailing newline. Untrimmed it yields
+    // `invalid_client`, an error that says nothing about its cause.
+    process.env.ES_HOST = "https://gateway:9200";
+    process.env.ES_OAUTH_TOKEN_URL = " https://idp.example.test/token ";
+    process.env.ES_OAUTH_CLIENT_ID = " mcp-elasticsearch ";
+    process.env.ES_OAUTH_CLIENT_SECRET = "s3cr3t\n";
+    process.env.ES_OAUTH_SCOPE = " es:read ";
+
+    const config = loadConfigFromEnv();
+
+    expect(config.oauth).toMatchObject({
+      tokenUrl: "https://idp.example.test/token",
+      clientId: "mcp-elasticsearch",
+      clientSecret: "s3cr3t",
+      scope: "es:read",
+    });
+  });
+
+  it("reads the secret from a file, newline included", () => {
+    const directory = mkdtempSync(join(tmpdir(), "es-mcp-oauth-"));
+    const file = join(directory, "secret");
+    writeFileSync(file, "file-secret\n");
+
+    process.env.ES_HOST = "https://gateway:9200";
+    process.env.ES_OAUTH_TOKEN_URL = "https://idp.example.test/token";
+    process.env.ES_OAUTH_CLIENT_ID = "mcp";
+    process.env.ES_OAUTH_CLIENT_SECRET_FILE = file;
+
+    expect(loadConfigFromEnv().oauth?.clientSecret).toBe("file-secret");
+  });
+
+  it("refuses to start when the secret file cannot be read", () => {
+    // An unreachable credential must stop the server, not start a session that
+    // cannot authenticate and cannot say why.
+    process.env.ES_HOST = "https://gateway:9200";
+    process.env.ES_OAUTH_TOKEN_URL = "https://idp.example.test/token";
+    process.env.ES_OAUTH_CLIENT_ID = "mcp";
+    process.env.ES_OAUTH_CLIENT_SECRET_FILE = join(tmpdir(), "no-such-secret-file");
+
+    expect(() => loadConfigFromEnv()).toThrow(/ES_OAUTH_CLIENT_SECRET_FILE/);
+  });
+
+  it("builds the block from any single OAuth2 variable, so a gap is reported", () => {
+    // Reading it only when the token URL is present would let
+    // ES_OAUTH_CLIENT_ID alone be ignored in silence — a partial configuration
+    // that downgrades to another factor without a word.
+    process.env.ES_HOST = "https://gateway:9200";
+    process.env.ES_OAUTH_CLIENT_ID = "mcp";
+
+    const config = loadConfigFromEnv();
+
+    expect(config.oauth).toBeDefined();
+    expect(() => ConfigSchema.parse(config)).toThrow(/ES_OAUTH_TOKEN_URL/);
+  });
+
+  it("leaves the OAuth2 block absent when no variable is set", () => {
+    process.env.ES_HOST = "https://gateway:9200";
+
+    expect(loadConfigFromEnv().oauth).toBeUndefined();
+  });
+
+  it("ignores un-prefixed OAuth2 variables entirely", () => {
+    // The USERNAME hazard, with worse consequences: an ambient CLIENT_SECRET
+    // must never decide which identity this server presents.
+    process.env.ES_HOST = "https://gateway:9200";
+    process.env.CLIENT_ID = "ambient";
+    process.env.CLIENT_SECRET = "ambient-secret";
+    process.env.SCOPE = "ambient-scope";
+
+    expect(loadConfigFromEnv().oauth).toBeUndefined();
   });
 
   it("produces an invalid config when ES_HOST is unset, failing at startup", () => {

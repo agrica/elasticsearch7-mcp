@@ -37,6 +37,48 @@ export function textFragment(text: string): TextFragment {
 }
 
 /**
+ * What an authentication challenge is allowed to add to an error message.
+ *
+ * A 401 or a 403 from Elasticsearch — or from a gateway in front of it — carries
+ * `WWW-Authenticate`, and the MCP specification normalises the useful case:
+ * `403` with `error="insufficient_scope"` and the `scope` the caller lacks.
+ * Surfacing those two fields turns "403 Forbidden" into a message naming the
+ * scope to add, which is why this server does not retry a rejected token: a
+ * retry cannot fix a missing scope, and a message can.
+ *
+ * Two named fields, never the header set. This function sits in the module that
+ * already decides what an error may leak — see the note in `toolError` about
+ * `meta` — and the same restraint applies to what it adds.
+ */
+function authChallengeHint(error: unknown): string {
+  const status = (error as { statusCode?: unknown } | null)?.statusCode;
+  if (status !== 401 && status !== 403) return "";
+
+  // `ResponseError` exposes the response headers twice: directly, and through
+  // `meta`. Both are read because the direct one is the documented convenience
+  // and the other is where it comes from — an error constructed either way is
+  // still recognised.
+  const candidate = error as {
+    headers?: Record<string, unknown>;
+    meta?: { headers?: Record<string, unknown> };
+  } | null;
+  const headers = candidate?.headers ?? candidate?.meta?.headers;
+  const challenge = headers?.["www-authenticate"];
+  if (typeof challenge !== "string") return "";
+
+  const code = /error="([^"]*)"/.exec(challenge)?.[1];
+  const scope = /scope="([^"]*)"/.exec(challenge)?.[1];
+  if (!code && !scope) return "";
+
+  return (
+    ` The target answered ${status}` +
+    (code ? ` with error="${code}"` : "") +
+    (scope ? `, and asks for scope "${scope}"` : "") +
+    (scope ? " — ES_OAUTH_SCOPE has to include it." : ".")
+  );
+}
+
+/**
  * Tools never throw: a failure has to reach the calling model as readable
  * content, never as a transport-level exception. `context` prefixes the stderr
  * log — stdout belongs to the MCP protocol and must not be written to.
@@ -46,8 +88,11 @@ export function toolError(context: string, error: unknown): ToolResult {
   console.error(`${context}: ${message}`);
   // Only `error.message` reaches the model, never the error object: an ES
   // client error carries the connection in `meta`, and a node URL may embed
-  // basic-auth credentials.
-  return { content: [textFragment(`Error: ${message}`)], isError: true };
+  // basic-auth credentials. The authentication hint is held to the same rule.
+  return {
+    content: [textFragment(`Error: ${message}${authChallengeHint(error)}`)],
+    isError: true,
+  };
 }
 
 /**

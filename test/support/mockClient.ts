@@ -65,6 +65,12 @@ export type CapturedRequest = {
   path: string;
   body: any;
   querystring: Record<string, string>;
+  /**
+   * The headers that actually went on the wire. The mock's resolver receives the
+   * connection's own request params, so this is the real merged set — which is
+   * what lets a test assert *which* credential a request carried.
+   */
+  headers?: Record<string, any>;
 };
 
 /**
@@ -74,16 +80,43 @@ export type CapturedRequest = {
  * there before the first real request: answering with a 7.8.0 payload is what
  * makes the client accept this "cluster" at all.
  */
-export function createMockedClient(): { client: Client; mock: ClientMock } {
+export function createMockedClient(
+  options: Partial<ConstructorParameters<typeof Client>[0]> = {}
+): { client: Client; mock: ClientMock; sentHeaders: Record<string, string>[] } {
   const mock = new ClientMockCtor();
   mock.add({ method: "GET", path: "/" }, () => INFO_7_8_0);
 
+  // Headers are recorded at the connection, not in the route resolver: the mock
+  // package strips them before calling the resolver, which receives only
+  // method, path, body and querystring. The connection's `request` is where the
+  // merged set exists — the same place the real client would send from — so this
+  // is what makes "which credential did this request carry" an answerable
+  // question. Subclassing the mock's own Connection is its supported extension
+  // point; the `any` is the same concession the cast above documents.
+  const sentHeaders: Record<string, string>[] = [];
+  const MockConnection = mock.getConnection();
+
+  class RecordingConnection extends MockConnection {
+    request(params: any, callback: any): any {
+      sentHeaders.push({ ...(params?.headers ?? {}) });
+      return (super.request as any)(params, callback);
+    }
+  }
+
   const client = new Client({
     node: "http://localhost:9200",
-    Connection: mock.getConnection(),
+    Connection: RecordingConnection as unknown as typeof Connection,
+    ...options,
   });
 
-  return { client, mock };
+  return { client, mock, sentHeaders };
+}
+
+/** The Authorization header of the last request that reached the connection. */
+export function lastAuthorization(
+  sentHeaders: Record<string, string>[]
+): string | undefined {
+  return sentHeaders[sentHeaders.length - 1]?.authorization;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { toolError } from "../src/toolResult.js";
 import type { Client } from "@elastic/elasticsearch";
 import { bulk } from "../src/tools/bulk.js";
 import { createIndex } from "../src/tools/createIndex.js";
@@ -125,6 +126,42 @@ describe("tool contract, with every cluster call failing", () => {
     const result = await listIndices(client);
 
     expect(result.isError).toBeUndefined();
+  });
+
+  it("names the scope a gateway asked for, when it refuses the token", async () => {
+    // This is what stands in for a retry on 401. A retry cannot conjure a scope
+    // the token does not have; a message naming it tells the operator exactly
+    // which variable to change. The shape is the one the MCP specification
+    // normalises: 403 with error="insufficient_scope" and the required scope.
+    const refused = Object.assign(new Error("Forbidden"), {
+      statusCode: 403,
+      headers: {
+        "www-authenticate":
+          'Bearer error="insufficient_scope", scope="es:write", error_description="write access required"',
+      },
+    });
+
+    const result = toolError("Search failed", refused);
+    const text = result.content[0]?.text ?? "";
+
+    expect(isFailure(result)).toBe(true);
+    expect(text).toContain("insufficient_scope");
+    expect(text).toContain("es:write");
+    expect(text).toContain("ES_OAUTH_SCOPE");
+    // Only the two named fields: the rest of the challenge is not repeated, for
+    // the same reason `meta` never is — headers can carry credentials.
+    expect(text).not.toContain("write access required");
+  });
+
+  it("adds nothing to an error that is not an authentication failure", async () => {
+    const plain = Object.assign(new Error("index_not_found_exception"), {
+      statusCode: 404,
+      headers: { "www-authenticate": 'Bearer scope="es:write"' },
+    });
+
+    expect(toolError("Search failed", plain).content[0]?.text).toBe(
+      "Error: index_not_found_exception"
+    );
   });
 
   it("marks a guardrail refusal as a failure, not a quiet success", async () => {

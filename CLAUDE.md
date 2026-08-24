@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 191 tests, mocked at the client connection layer
+pnpm test             # vitest run — 225 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -65,7 +65,7 @@ had before. Running the workflow manually (`workflow_dispatch`) rehearses everyt
 a dry run.
 
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
-`src/server.ts` (currently `0.1.0` in both — the release guard fails if they diverge),
+`src/server.ts` (currently `0.2.0` in both — the release guard fails if they diverge),
 commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
 publication; no extra secret is needed.
 
@@ -87,7 +87,8 @@ Three layers, deliberately thin:
 1. **`index.ts`** — bootstrap only: `loadConfigFromEnv()` → `StdioServerTransport` → `createElasticsearchMcpServer()` → connect, plus SIGINT shutdown.
 2. **`src/server.ts`** — composition only. Constructs one shared `@elastic/elasticsearch` `Client`, calls the three register modules according to the config flags, and re-exports all tool functions — that re-export block is what `scripts/smoke.mjs` and any library consumer import.
 3. **`src/register/*.ts`** — the registration points, one per tool set (see below). Each declares its tools via `server.registerTool(name, { title, description, inputSchema, outputSchema?, annotations }, handler)`; handlers are one-liners forwarding to a tool function with `esClient` as the first argument. Two shared modules sit beside them: `schemas.ts` (the `indexName` / `requiredText` validators) and `outputSchemas.ts` (the four output schemas, collected so their shared `total` / `returned` / `omitted` shape is visible at a glance).
-4. **`src/tools/*.ts`** — one file per capability, exporting plain async functions `(esClient, ...args)`. They hold all ES interaction and all response formatting.
+4. **`src/auth/*.ts`** — authentication that is not the cluster's own: `oauth2.ts` (the token), `clientSource.ts` (which client a tool is handed). Nothing below this layer knows a token exists.
+5. **`src/tools/*.ts`** — one file per capability, exporting plain async functions `(esClient, ...args)`. They hold all ES interaction and all response formatting.
 
 ### Three tool sets, gated at registration
 
@@ -123,7 +124,9 @@ Results are formatted as human/LLM-readable text (multiple fragments: a summary 
 
 ### MCP conformance: what the specification requires and what this server does
 
-Audited against the 2025-06-18 specification. Five points are load-bearing, and one is a deliberate deviation.
+Audited against the 2025-06-18 specification, and re-checked against 2025-11-25 when the OAuth2 factor was designed — the clauses that bear on this server are word for word identical in both. Five points are load-bearing, and one is a deliberate deviation.
+
+Worth knowing before anyone reaches for the MCP authorization specification: it does not apply here, by its own terms. "Implementations using an STDIO transport **SHOULD NOT** follow this specification, and instead retrieve credentials from the environment." Its OAuth apparatus governs the *client → server* axis over HTTP; `ES_OAUTH_*` is the other axis, server → upstream API, which the same page provides for explicitly ("it may act as an OAuth client to them... a separate token"). The accompanying MUST NOT — never pass the client's token through — holds by construction here, and must keep holding: forwarding a caller-supplied token would be the token passthrough anti-pattern.
 
 - **`isError: true` on every failure.** The specification separates protocol errors (JSON-RPC) from *tool execution* errors, which are results carrying `isError`. `toolError()` and `toolRefusal()` both set it; success omits it, since the protocol defaults it to false. A guardrail refusal counts as a failure — reporting it as a success would let a model conclude a delete had happened. `test/toolContract.test.ts` asserts the flag for all 26 tools; removing it from `toolResult.ts` fails 27 tests.
 - **Every tool carries `annotations` and a `title`, via `registerTool`.** `server.tool()` is deprecated in SDK 1.30 and cannot pass either. The hints are what a client reads to decide whether to ask the user first, so they are the client-side counterpart of the registration gating — not a replacement for it, since the specification tells clients to distrust annotations from an untrusted server. `idempotentHint` is claimed only where repeating the identical call really leaves the same state: `create_index` fails when the index exists, `delete_index` 404s once it is gone, and `bulk` without an id field creates new documents each time — all four are annotated `false`, and a test enforces that.
@@ -223,6 +226,23 @@ Keep the zod parameter order and the tool function's positional parameter order 
 `ES_HOST` (comma-separated for multiple nodes → `nodes[]` for failover/load balancing), `ES_API_KEY`, `ES_USERNAME`/`ES_PASSWORD`, `ES_CA_CERT` (→ `ssl.ca`; the 7.x client calls this option `ssl`, not `tls`). Each has an un-prefixed legacy fallback (`HOST`, `API_KEY`, `USERNAME`, …) kept for backward compatibility. Auth precedence: API key wins; basic auth applies only when *both* username and password are non-empty.
 
 `ES_REQUEST_TIMEOUT`, `ES_MAX_RETRIES` and `ES_MAX_RESULT_BYTES` are numeric. A malformed value is reported to stderr and ignored rather than fatal: refusing to start because `ES_MAX_RETRIES=three` would take the session down over a setting with a sane fallback. `loadConfigFromEnv()` returns `ElasticsearchConfigInput`, not the validated type, precisely so an unset number can come back `undefined` and let zod's `.default()` stay the single place each default is written.
+
+### OAuth2, the third authentication factor
+
+`ES_OAUTH_TOKEN_URL`, `ES_OAUTH_CLIENT_ID`, `ES_OAUTH_CLIENT_SECRET` (or
+`..._SECRET_FILE`), `ES_OAUTH_SCOPE`, `ES_OAUTH_AUDIENCE`,
+`ES_OAUTH_AUTH_STYLE`. `src/auth/oauth2.ts` obtains a `client_credentials` token;
+`src/auth/clientSource.ts` attaches it. Design record:
+`docs/superpowers/specs/2026-08-24-oauth2-client-credentials-design.md`.
+
+- **The injection point is `base.child({ auth: { bearer } })`, memoised per token.** The 7.x `child()` shares the parent's connection pool *and* copies the product-check symbol (`index.js:260-288`), so a rotation opens no socket and repeats no `GET /` — verified, and `test/clientSource.test.ts` asserts it. The child's header beats the shared connection's own (`Transport.js:390`, then `Connection.js:261`), so a bearer child works even over a parent carrying an API key. Do not "simplify" this into rebuilding the client, and do not try to inject the header per request through a Proxy: the token is only available asynchronously while the client's methods return an abortable promise synchronously, so cancellation would have to be faked.
+- **Precedence is OAuth2, then API key, then basic — and when OAuth2 wins the base client is given *no* `auth` at all.** That is a safety property, not tidiness: if the bearer path breaks, the request must fail with a 401 rather than quietly succeeding as whatever identity `ES_API_KEY` names. Startup logs which factor is in force and which were ignored, because silent precedence is how the wrong identity ships.
+- **A partial OAuth2 block is fatal at startup.** The loader builds the block as soon as *any* `ES_OAUTH_*` variable is set, so a forgotten one is a zod error rather than a silent fallback. This is deliberately the opposite of how a malformed `ES_MAX_RETRIES` is treated: that has a safe default, a substituted identity has not.
+- **`ES_OAUTH_TOKEN_URL` must be `https://`**, loopback excepted, and there is no override flag. The exposure is the client secret in the clear, not SSRF — the URL comes from the operator.
+- **The secret is trimmed from both sources**, because a pasted secret carries a newline and a file written with `echo` always does; untrimmed it yields `invalid_client` and nothing pointing at why.
+- **Nothing logs the token or the secret**, and a token-endpoint error reports only the RFC 6749 §5.2 fields — an identity provider that echoes the request back would otherwise carry the secret into a tool result.
+- **`clientRunner` is where an acquisition failure is caught.** Handlers run *outside* the tool's own error handling, so a rejected token request would otherwise reach the SDK as a JSON-RPC error instead of an `isError` result. `toolError` separately enriches a 401/403 with the `error` and `scope` of its `WWW-Authenticate` header — two named fields, never the header set — which is what stands in for the retry this server does not do: a retry cannot conjure a missing scope, a message can name it.
+- **No un-prefixed fallback**, for the `USERNAME` reason below with worse consequences.
 
 `ES_INSTANCE_LABEL` is free text and purely cosmetic — it becomes `serverInfo.title` (`Elasticsearch 7.x — production`) and is echoed to stderr at startup. It exists because a real `mcpServers` block usually declares this server once per cluster, and without it a client shows two identically named servers. It has no effect on behaviour: do not make anything depend on it, in particular not the destructive gate, which is `ES_ALLOW_DESTRUCTIVE` and nothing else.
 

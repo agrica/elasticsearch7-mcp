@@ -60,6 +60,19 @@ ENV ES_API_KEY=""
 ENV ES_USERNAME=""
 ENV ES_PASSWORD=""
 ENV ES_CA_CERT=""
+
+# OAuth2 client_credentials, for a cluster behind a gateway that validates
+# bearer tokens. ES_OAUTH_TOKEN_URL is what turns the factor on; a partial block
+# is refused at startup rather than silently falling back to another identity.
+# Prefer ES_OAUTH_CLIENT_SECRET_FILE with a mounted secret: an env var is visible
+# in `docker inspect`.
+ENV ES_OAUTH_TOKEN_URL=""
+ENV ES_OAUTH_CLIENT_ID=""
+ENV ES_OAUTH_CLIENT_SECRET=""
+ENV ES_OAUTH_CLIENT_SECRET_FILE=""
+ENV ES_OAUTH_SCOPE=""
+ENV ES_OAUTH_AUDIENCE=""
+ENV ES_OAUTH_AUTH_STYLE=""
 # Shown as the server title. Worth setting when a client declares more than one
 # instance, so production and staging are not two identically named servers.
 ENV ES_INSTANCE_LABEL=""

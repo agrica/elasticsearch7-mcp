@@ -110,7 +110,8 @@ for a single index gets a refusal instead of an emptied cluster.
 ### Connect it to your client
 
 Every example below sets `ES_HOST` and `ES_API_KEY`. Swap in
-`ES_USERNAME`/`ES_PASSWORD` for basic auth, add `ES_ADMIN_TOOLS=true` to get
+`ES_USERNAME`/`ES_PASSWORD` for basic auth or the `ES_OAUTH_*` variables for
+OAuth2 (see [OAuth2](#oauth2)), add `ES_ADMIN_TOOLS=true` to get
 the diagnostic tools, and set `ES_INSTANCE_LABEL` when more than one instance is
 declared — see [Configuration Options](#configuration-options).
 
@@ -223,6 +224,13 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 | `ES_USERNAME` | Elasticsearch username for basic authentication (also supports legacy `USERNAME`) | No |
 | `ES_PASSWORD` | Elasticsearch password for basic authentication (also supports legacy `PASSWORD`) | No |
 | `ES_CA_CERT` | Path to custom CA certificate for Elasticsearch SSL/TLS (also supports legacy `CA_CERT`) | No |
+| `ES_OAUTH_TOKEN_URL` | OAuth2 token endpoint. Setting it turns on OAuth2, which then takes precedence over the API key and basic auth. Must be `https://` (plain `http://` is accepted only for `localhost`). | No |
+| `ES_OAUTH_CLIENT_ID` | OAuth2 client id. Required once `ES_OAUTH_TOKEN_URL` is set. | No |
+| `ES_OAUTH_CLIENT_SECRET` | OAuth2 client secret. Required once `ES_OAUTH_TOKEN_URL` is set, unless the `_FILE` form is used. | No |
+| `ES_OAUTH_CLIENT_SECRET_FILE` | Path to a file holding the secret, for a mounted Docker secret. Read and trimmed at startup. | No |
+| `ES_OAUTH_SCOPE` | Scope to request, if the provider needs one. | No |
+| `ES_OAUTH_AUDIENCE` | Audience to request. Auth0 needs it to issue a JWT; Keycloak and Azure AD use `ES_OAUTH_SCOPE` instead. | No |
+| `ES_OAUTH_AUTH_STYLE` | `post` (default) sends the credentials in the form body; `basic` sends them in an HTTP Basic header. | No |
 | `ES_REQUEST_TIMEOUT` | Per-request timeout in milliseconds. Default `30000` — raise it if aggregations over many indices time out. | No |
 | `ES_MAX_RETRIES` | Retries per request. Default `3`; `0` disables them. | No |
 | `ES_MAX_RESULT_BYTES` | Ceiling on one tool result. Default `32768`. Past it, detail is omitted and the result says so. | No |
@@ -237,6 +245,52 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 > something that decides whether deletes are reachable.
 >
 > Both accept `true` or `1`; anything else, including an unset variable, means off.
+
+### OAuth2
+
+Set `ES_OAUTH_TOKEN_URL`, `ES_OAUTH_CLIENT_ID` and `ES_OAUTH_CLIENT_SECRET` and
+the server obtains a `client_credentials` token, renews it before it expires, and
+sends it as `Authorization: Bearer …` on every request. It takes precedence over
+`ES_API_KEY` and `ES_USERNAME`/`ES_PASSWORD`, and says so on stderr at startup if
+those are still set — so you can see which identity is really talking to the
+cluster.
+
+**What it is for.** An Elasticsearch 7.x cluster cannot validate a third-party
+OAuth2 token itself: the JWT realm arrived in 8.2, and the 7.x OIDC realm needs a
+platinum licence and a browser. So this is for a cluster reached through a
+**gateway that validates the token** and forwards the request. Point `ES_HOST` at
+the gateway.
+
+**Keep the secret out of the config file.** A project `.mcp.json` is checked into
+version control, so reference the secret instead of pasting it:
+
+```json
+{
+  "mcpServers": {
+    "elasticsearch": {
+      "command": "npx",
+      "args": ["-y", "@agrica/elasticsearch7-mcp"],
+      "env": {
+        "ES_HOST": "https://es-gateway.internal",
+        "ES_OAUTH_TOKEN_URL": "https://idp.internal/realms/data/protocol/openid-connect/token",
+        "ES_OAUTH_CLIENT_ID": "mcp-elasticsearch",
+        "ES_OAUTH_CLIENT_SECRET": "${ES_OAUTH_CLIENT_SECRET}",
+        "ES_OAUTH_SCOPE": "es:read"
+      }
+    }
+  }
+}
+```
+
+`${VAR}` is expanded from your own environment. The alternatives are a
+user-scoped server entry (`claude mcp add --scope local`, stored outside the
+repository) or `ES_OAUTH_CLIENT_SECRET_FILE` pointing at a mounted file.
+
+**Ask for the scope you can use.** If the deployment runs without
+`ES_ALLOW_DESTRUCTIVE`, request a read-only scope: a write scope buys nothing
+when no write tool is registered, and widens what the secret is worth if it
+leaks. When the gateway refuses a request for want of a scope, the error names
+the one it asked for.
 
 ### Result size
 
@@ -414,6 +468,9 @@ client owns its stdin and stdout.
 |---|---|
 | `npm error code E401` on install or `npx` | No GitHub Packages token in your user-level `~/.npmrc`. See [Authenticate to GitHub Packages](#authenticate-to-github-packages-once). |
 | `Server error: ... invalid url` at startup | `ES_HOST` is unset or malformed. It is validated at startup on purpose, rather than failing later on the first query. |
+| `Server error: ... ES_OAUTH_CLIENT_SECRET ... is required` | An `ES_OAUTH_*` variable is set but the block is incomplete. A half-configured factor is refused rather than falling back to another identity. |
+| `Error: Authentication failed before any request was sent: …` on every tool | The token endpoint could not be reached, or refused the credentials. The message carries the provider's own `error` field. Nothing was sent to the cluster. |
+| `Error: … error="insufficient_scope", and asks for scope "…"` | The gateway wants a scope the token does not carry. Add it to `ES_OAUTH_SCOPE`. |
 | The client connects, but a diagnostic or delete tool is missing | That set is gated. Set `ES_ADMIN_TOOLS=true` or `ES_ALLOW_DESTRUCTIVE=true` and restart the client. |
 | `Refusing to act on the pattern "logs-*"` | Working as intended: destructive tools take one concrete index name, never a pattern, even with the flag on. |
 | A connection error mentioning the product check | The cluster is 8.x, or unreachable. This build talks to 7.x only. |

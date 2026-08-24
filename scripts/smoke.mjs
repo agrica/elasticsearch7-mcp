@@ -31,6 +31,7 @@ import { Client } from "@elastic/elasticsearch";
 import {
   loadConfigFromEnv,
   createClientOptions,
+  ConfigSchema,
 } from "../dist/src/config/schema.js";
 import {
   getClusterHealth,
@@ -58,6 +59,10 @@ import {
   deleteIndex,
   deleteDocument,
   deleteByQuery,
+} from "../dist/src/server.js";
+import {
+  createClientSource,
+  createTokenProvider,
 } from "../dist/src/server.js";
 
 const writeFlagIndex = process.argv.indexOf("--write");
@@ -165,7 +170,31 @@ function firstUserIndex(result) {
 }
 
 const config = loadConfigFromEnv();
-const esClient = new Client(createClientOptions(config));
+
+// The client is built the way the server builds it, through the same source, so
+// that a smoke run against a real cluster also exercises the authentication
+// factor in force. With OAuth2 configured this is the only check in the
+// repository that talks to a real identity provider — the unit tests stub fetch.
+const clientSource = createClientSource(
+  new Client(createClientOptions(config)),
+  config.oauth ? createTokenProvider(ConfigSchema.parse(config).oauth) : undefined
+);
+
+let esClient;
+try {
+  esClient = await clientSource();
+} catch (error) {
+  // Same treatment as an unreachable cluster below: a smoke run that cannot
+  // authenticate has to say so in one line, not print a fetch stack trace.
+  console.error(
+    `Impossible d'obtenir un jeton OAuth2 : ${
+      error instanceof Error
+        ? `${error.message}${error.cause instanceof Error ? ` (${error.cause.message})` : ""}`
+        : String(error)
+    }`
+  );
+  process.exit(1);
+}
 
 console.log(`Cible : ${JSON.stringify(config.urls)}`);
 

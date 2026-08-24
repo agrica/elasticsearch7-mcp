@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Client } from "@elastic/elasticsearch";
-import { withCancellation } from "../cancellable.js";
+import type { ClientSource } from "../auth/clientSource.js";
+import { clientRunner } from "./clientRunner.js";
 import { indexName, requiredText } from "./schemas.js";
 import {
   deleteByQuery,
@@ -21,14 +21,14 @@ import { deleteIndexTemplate } from "../tools/createIndexTemplate.js";
  */
 export function registerDestructiveTools(
   server: McpServer,
-  esClient: Client
+  source: ClientSource
 ): void {
-  // Every handler reaches the cluster through this. The client it returns aborts
-  // its in-flight request when the MCP client cancels the call — see
-  // src/cancellable.ts for why that is bound to the client and not threaded
-  // through each tool's arguments.
-  const es = (extra: { signal: AbortSignal }) =>
-    withCancellation(esClient, extra.signal);
+  // Every handler reaches the cluster through this: it resolves the client —
+  // obtaining an OAuth2 token when that factor is configured — wraps it so the
+  // request aborts when the MCP client cancels, and turns an authentication
+  // failure into a tool result rather than a protocol error. See
+  // src/register/clientRunner.ts.
+  const call = clientRunner(source);
 
   // Delete an index template
   server.registerTool(
@@ -41,9 +41,7 @@ export function registerDestructiveTools(
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ name }, extra) => {
-      return await deleteIndexTemplate(es(extra), name);
-    }
+    async ({ name }, extra) => call(extra, (es) => deleteIndexTemplate(es, name))
   );
 
   // Delete an index and everything in it
@@ -57,9 +55,7 @@ export function registerDestructiveTools(
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await deleteIndex(es(extra), index);
-    }
+    async ({ index }, extra) => call(extra, (es) => deleteIndex(es, index))
   );
 
   // Delete one document
@@ -75,9 +71,7 @@ export function registerDestructiveTools(
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, id }, extra) => {
-      return await deleteDocument(es(extra), index, id);
-    }
+    async ({ index, id }, extra) => call(extra, (es) => deleteDocument(es, index, id))
   );
 
   // Delete everything a query matches
@@ -95,8 +89,6 @@ export function registerDestructiveTools(
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, query }, extra) => {
-      return await deleteByQuery(es(extra), index, query);
-    }
+    async ({ index, query }, extra) => call(extra, (es) => deleteByQuery(es, index, query))
   );
 }

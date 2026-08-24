@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Client } from "@elastic/elasticsearch";
-import { withCancellation } from "../cancellable.js";
+import type { ClientSource } from "../auth/clientSource.js";
+import { clientRunner } from "./clientRunner.js";
 import { indexName } from "./schemas.js";
 import { GET_INDEX_SETTINGS_OUTPUT, LIST_SHARDS_OUTPUT } from "./outputSchemas.js";
 import {
@@ -25,13 +25,13 @@ import { listTasks } from "../tools/tasks.js";
  * Enable it wherever the agent is expected to diagnose — production included,
  * which is where these are most useful.
  */
-export function registerAdminTools(server: McpServer, esClient: Client): void {
-  // Every handler reaches the cluster through this. The client it returns aborts
-  // its in-flight request when the MCP client cancels the call — see
-  // src/cancellable.ts for why that is bound to the client and not threaded
-  // through each tool's arguments.
-  const es = (extra: { signal: AbortSignal }) =>
-    withCancellation(esClient, extra.signal);
+export function registerAdminTools(server: McpServer, source: ClientSource): void {
+  // Every handler reaches the cluster through this: it resolves the client —
+  // obtaining an OAuth2 token when that factor is configured — wraps it so the
+  // request aborts when the MCP client cancels, and turns an authentication
+  // failure into a tool result rather than a protocol error. See
+  // src/register/clientRunner.ts.
+  const call = clientRunner(source);
 
   // Why a shard will not allocate
   server.registerTool(
@@ -57,9 +57,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, shard, primary }, extra) => {
-      return await explainAllocation(es(extra), index, shard, primary);
-    }
+    async ({ index, shard, primary }, extra) => call(extra, (es) => explainAllocation(es, index, shard, primary))
   );
 
   // Shard-level state, which index health cannot show
@@ -82,9 +80,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       outputSchema: LIST_SHARDS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, verbose }, extra) => {
-      return await listShards(es(extra), index, verbose);
-    }
+    async ({ index, verbose }, extra) => call(extra, (es) => listShards(es, index, verbose))
   );
 
   // Per-index counters
@@ -98,9 +94,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await getIndexStats(es(extra), index);
-    }
+    async ({ index }, extra) => call(extra, (es) => getIndexStats(es, index))
   );
 
   // Node capacity
@@ -112,9 +106,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async (_args, extra) => {
-      return await listNodes(es(extra));
-    }
+    async (_args, extra) => call(extra, (es) => listNodes(es))
   );
 
   // Index settings
@@ -129,9 +121,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       outputSchema: GET_INDEX_SETTINGS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await getIndexSettings(es(extra), index);
-    }
+    async ({ index }, extra) => call(extra, (es) => getIndexSettings(es, index))
   );
 
   // Cluster settings that were overridden
@@ -143,9 +133,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async (_args, extra) => {
-      return await getClusterSettings(es(extra));
-    }
+    async (_args, extra) => call(extra, (es) => getClusterSettings(es))
   );
 
   // Everything the cluster is currently running
@@ -162,8 +150,6 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ actions }, extra) => {
-      return await listTasks(es(extra), actions);
-    }
+    async ({ actions }, extra) => call(extra, (es) => listTasks(es, actions))
   );
 }

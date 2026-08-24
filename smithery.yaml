@@ -26,6 +26,30 @@ startCommand:
         type: string
         description: Path to custom CA certificate for ES SSL/TLS (optional, or legacy
           CA_CERT)
+      esOauthTokenUrl:
+        type: string
+        description: OAuth2 token endpoint. Setting it enables OAuth2, which then
+          takes precedence over the API key and basic auth. Must be https, except
+          for localhost.
+      esOauthClientId:
+        type: string
+        description: OAuth2 client id (required once the token URL is set)
+      esOauthClientSecret:
+        type: string
+        description: OAuth2 client secret (required once the token URL is set)
+      esOauthScope:
+        type: string
+        description: Scope to request, if the provider needs one
+      esOauthAudience:
+        type: string
+        description: Audience to request, which Auth0 needs to issue a JWT
+      esOauthAuthStyle:
+        type: string
+        enum:
+          - post
+          - basic
+        description: Send the client credentials in the form body (post, the
+          default) or in an HTTP Basic header (basic)
       esRequestTimeout:
         type: number
         default: 30000
@@ -67,6 +91,15 @@ startCommand:
         ES_PASSWORD: config.esPassword || '',
         ES_CA_CERT: config.esCaCert || '',
         ES_INSTANCE_LABEL: config.esInstanceLabel || '',
+        // OAuth2. The token URL is what switches the factor on, and a partial
+        // block is refused by the server at startup rather than falling back to
+        // another identity — so passing these through empty is safe.
+        ES_OAUTH_TOKEN_URL: config.esOauthTokenUrl || '',
+        ES_OAUTH_CLIENT_ID: config.esOauthClientId || '',
+        ES_OAUTH_CLIENT_SECRET: config.esOauthClientSecret || '',
+        ES_OAUTH_SCOPE: config.esOauthScope || '',
+        ES_OAUTH_AUDIENCE: config.esOauthAudience || '',
+        ES_OAUTH_AUTH_STYLE: config.esOauthAuthStyle || '',
         // Empty string rather than a repeated default: the server's zod schema
         // owns each default, and duplicating them here is how the two drift.
         ES_REQUEST_TIMEOUT: config.esRequestTimeout ? String(config.esRequestTimeout) : '',

@@ -1,6 +1,6 @@
 {
   "name": "@agrica/elasticsearch7-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Elasticsearch 7.x MCP Server",
   "keywords": [
     "elasticsearch",

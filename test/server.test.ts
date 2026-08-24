@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { ElasticsearchConfigInput } from "../src/config/schema.js";
 import { createElasticsearchMcpServer } from "../src/server.js";
 
 /**
@@ -47,11 +48,7 @@ const DESTRUCTIVE_TOOLS = [
 ];
 
 async function connectedClient(
-  flags: {
-    adminTools?: boolean;
-    allowDestructive?: boolean;
-    instanceLabel?: string;
-  } = {}
+  flags: Partial<Omit<ElasticsearchConfigInput, "urls">> = {}
 ) {
   // Port 1 cannot be bound without privileges, so the connection is refused
   // instantly and identically everywhere. Pointing at localhost:9200 would make
@@ -305,6 +302,59 @@ describe("MCP server registration", () => {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool?.annotations?.idempotentHint, `${name} is not idempotent`).toBe(false);
     }
+    await client.close();
+  });
+
+  it("reports a failed token exchange as a tool error, not a protocol error", async () => {
+    // The trap this guards: the client is resolved in the handler, *outside* the
+    // tool's own error handling, so a rejected token request would reach the SDK
+    // and come back as a JSON-RPC error. Every failure in this server has to
+    // arrive as readable content carrying isError instead.
+    const { client } = await connectedClient({
+      oauth: {
+        // Port 1 cannot be bound, so the token request is refused at once
+        // rather than waiting out a timeout.
+        tokenUrl: "https://127.0.0.1:1/token",
+        clientId: "mcp",
+        clientSecret: "s3cr3t",
+      },
+    });
+
+    const result = (await client.callTool({
+      name: "list_indices",
+      arguments: {},
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Authentication failed");
+    await client.close();
+  });
+
+  it("says which authentication factor is in force, and which are ignored", async () => {
+    // A silent precedence is how an operator ships the wrong identity: they
+    // leave ES_API_KEY in place, OAuth2 wins, and nothing says so.
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((message: unknown) => {
+      lines.push(String(message));
+    });
+
+    const { client } = await connectedClient({
+      apiKey: "left-over-key",
+      oauth: {
+        tokenUrl: "https://idp.example.test/token",
+        clientId: "mcp-elasticsearch",
+        clientSecret: "s3cr3t",
+        scope: "es:read",
+      },
+    });
+
+    const startup = lines.join("\n");
+    expect(startup).toContain("OAuth2 client_credentials as mcp-elasticsearch");
+    expect(startup).toContain("ES_API_KEY ignored");
+    // Never the secret, on any line.
+    expect(startup).not.toContain("s3cr3t");
+
+    spy.mockRestore();
     await client.close();
   });
 

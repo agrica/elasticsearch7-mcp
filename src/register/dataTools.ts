@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Client } from "@elastic/elasticsearch";
-import { withCancellation } from "../cancellable.js";
+import type { ClientSource } from "../auth/clientSource.js";
+import { clientRunner } from "./clientRunner.js";
 import { indexName, requiredText } from "./schemas.js";
 import { GET_MAPPINGS_OUTPUT, LIST_INDICES_OUTPUT } from "./outputSchemas.js";
 import { listIndices } from "../tools/listIndices.js";
@@ -26,13 +26,13 @@ import {
  * Tools that read data, or write it without destroying any. Always registered:
  * this is what the server is for.
  */
-export function registerDataTools(server: McpServer, esClient: Client): void {
-  // Every handler reaches the cluster through this. The client it returns aborts
-  // its in-flight request when the MCP client cancels the call — see
-  // src/cancellable.ts for why that is bound to the client and not threaded
-  // through each tool's arguments.
-  const es = (extra: { signal: AbortSignal }) =>
-    withCancellation(esClient, extra.signal);
+export function registerDataTools(server: McpServer, source: ClientSource): void {
+  // Every handler reaches the cluster through this: it resolves the client —
+  // obtaining an OAuth2 token when that factor is configured — wraps it so the
+  // request aborts when the MCP client cancels, and turns an authentication
+  // failure into a tool result rather than a protocol error. See
+  // src/register/clientRunner.ts.
+  const call = clientRunner(source);
 
   // list all indices
   server.registerTool(
@@ -54,9 +54,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       outputSchema: LIST_INDICES_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ pattern, verbose }, extra) => {
-      return await listIndices(es(extra), pattern, verbose);
-    }
+    async ({ pattern, verbose }, extra) => call(extra, (es) => listIndices(es, pattern, verbose))
   );
 
   // get mappings for a specific index
@@ -71,9 +69,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       outputSchema: GET_MAPPINGS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await getMappings(es(extra), index);
-    }
+    async ({ index }, extra) => call(extra, (es) => getMappings(es, index))
   );
 
   // search with query DSL
@@ -106,9 +102,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, queryBody }, extra) => {
-      return await search(es(extra), index, queryBody);
-    }
+    async ({ index, queryBody }, extra) => call(extra, (es) => search(es, index, queryBody))
   );
 
   // Get the health status of the Elasticsearch cluster, optionally include index-level details
@@ -126,9 +120,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ includeIndices }, extra) => {
-      return await getClusterHealth(es(extra), includeIndices);
-    }
+    async ({ includeIndices }, extra) => call(extra, (es) => getClusterHealth(es, includeIndices))
   );
 
   // Create an Elasticsearch index, optionally configure settings and mappings
@@ -152,9 +144,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ index, settings, mappings }, extra) => {
-      return await createIndex(es(extra), index, settings, mappings);
-    }
+    async ({ index, settings, mappings }, extra) => call(extra, (es) => createIndex(es, index, settings, mappings))
   );
 
   // Create or update the mapping structure of an Elasticsearch index
@@ -172,9 +162,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, mappings }, extra) => {
-      return await createMapping(es(extra), index, mappings);
-    }
+    async ({ index, mappings }, extra) => call(extra, (es) => createMapping(es, index, mappings))
   );
 
   // Bulk import data into an Elasticsearch index
@@ -204,9 +192,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ index, documents, idField, refresh }, extra) => {
-      return await bulk(es(extra), index, documents, idField, refresh);
-    }
+    async ({ index, documents, idField, refresh }, extra) => call(extra, (es) => bulk(es, index, documents, idField, refresh))
   );
 
   // Reindex from source to target index with optional query and script
@@ -249,9 +235,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ sourceIndex, destIndex, query, script }, extra) => {
-      return await reindex(es(extra), sourceIndex, destIndex, script, query);
-    }
+    async ({ sourceIndex, destIndex, query, script }, extra) => call(extra, (es) => reindex(es, sourceIndex, destIndex, script, query))
   );
 
   // Create or update an index template
@@ -284,9 +268,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ name, indexPatterns, template, priority, version }, extra) => {
-      return await createIndexTemplate(es(extra), name, indexPatterns, template, priority, version);
-    }
+    async ({ name, indexPatterns, template, priority, version }, extra) => call(extra, (es) => createIndexTemplate(es, name, indexPatterns, template, priority, version))
   );
 
   // Get index templates
@@ -303,9 +285,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ name }, extra) => {
-      return await getIndexTemplate(es(extra), name);
-    }
+    async ({ name }, extra) => call(extra, (es) => getIndexTemplate(es, name))
   );
 
   // Count matching documents without transferring them
@@ -324,9 +304,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, query }, extra) => {
-      return await count(es(extra), index, query);
-    }
+    async ({ index, query }, extra) => call(extra, (es) => count(es, index, query))
   );
 
   // Fetch one document by id
@@ -342,9 +320,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, id }, extra) => {
-      return await getDocument(es(extra), index, id);
-    }
+    async ({ index, id }, extra) => call(extra, (es) => getDocument(es, index, id))
   );
 
   // Which aliases point where
@@ -361,9 +337,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index }, extra) => {
-      return await getAliases(es(extra), index);
-    }
+    async ({ index }, extra) => call(extra, (es) => getAliases(es, index))
   );
 
   // Follow up an asynchronous task
@@ -377,9 +351,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ taskId }, extra) => {
-      return await getTask(es(extra), taskId);
-    }
+    async ({ taskId }, extra) => call(extra, (es) => getTask(es, taskId))
   );
 
   // Cluster identity and version
@@ -391,8 +363,6 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       inputSchema: {},
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async (_args, extra) => {
-      return await getClusterInfo(es(extra));
-    }
+    async (_args, extra) => call(extra, (es) => getClusterInfo(es))
   );
 }
