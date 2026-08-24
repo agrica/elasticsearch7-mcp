@@ -44,6 +44,10 @@ nothing in the agent's context.
 * `create_index_template`: create or update a composable index template
 * `get_index_template`: read index templates
 
+#### Fields
+* `field_caps`: which fields exist across an index **pattern**, and whether each is searchable and aggregatable. Takes a wildcard, unlike `get_mappings` — and it is the only way to see a field mapped as two different types across indices, which makes an aggregation over it silently partial rather than failing.
+* `analyze`: the terms a text is broken into, which is what a query must produce to match. This is the answer to "my search returns nothing and I do not know why".
+
 #### Tasks
 * `get_task`: progress of a long-running task, such as the one `reindex` returns
 
@@ -74,6 +78,41 @@ reach them at all.
 Even with the flag on, these refuse a wildcard, a comma-separated list, `*` and
 `_all`: they act on one named index at a time. A model that mistakes `logs-*`
 for a single index gets a refusal instead of an emptied cluster.
+
+### `ES_ECS_TOOLS=true` — ECS log search (read-only)
+
+Four tools for clusters whose application logs are in
+[ECS](https://www.elastic.co/docs/reference/ecs/ecs-field-reference). They take
+named parameters instead of a query DSL and answer in log lines instead of JSON
+documents, because the schema is known in advance — which is also what lets them
+request only the fields they print.
+
+They need **`ES_ECS_INDEX_PATTERN`**, which has no default: the server refuses to
+start with the flag on and the pattern missing. A guess like `logs-*` would sweep
+whichever indices happen to match on your cluster and answer confidently from the
+wrong data.
+
+* `search_logs`: recent events, newest first, one line each — filter by `service`, `levels`/`minLevel`, `host`, `logger`, `dataset`, `traceId` and free text, over a window given as `15m`, `2h`, `7d`
+* `log_histogram`: counts per time bucket, to see when something started, peaked or stopped. The bucket width is derived from the window, and empty buckets are kept because a gap is part of the answer
+* `error_summary`: errors grouped by `error.type`, with counts, first and last occurrence, affected services and a sample message
+* `top_values`: the most frequent values of a field — what your cluster actually indexes, before you filter on a guess
+
+> [!NOTE]
+> **These target ECS 1.x field types, because that is what Elasticsearch 7.8 can
+> express.** `match_only_text` arrived in 7.14 and `wildcard` in 7.9, so a mapping
+> pushed to a 7.8 cluster necessarily predates ECS 1.12, where `error.message` and
+> `error.stack_trace` moved to those types.
+>
+> The consequence is visible in the tools: `error.message` is `text` with no
+> `keyword` sub-field, so errors **cannot** be grouped by message — `error_summary`
+> groups by `error.type` and gives events lacking one their own reported bucket
+> rather than dropping them. Grouping by `error.stack_trace` looks possible, since
+> ECS 1.x types it as `keyword`, but ECS sets `ignore_above: 1024` on keywords, so
+> a longer trace is not indexed and would silently vanish from the aggregation.
+
+Enabling this set adds about **8.4 KB** to the `tools/list` response every
+session, which is why it is a flag: a cluster whose logs are not in ECS would
+pay for four tool schemas that can only return nothing.
 
 ### How It Works
 
@@ -237,9 +276,11 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 | `ES_INSTANCE_LABEL` | Free-text name of this deployment, e.g. `production`. Shown as the server title, so several instances declared side by side are distinguishable. | No |
 | `ES_ADMIN_TOOLS` | `true` to also expose the read-only diagnostic tools. Default off. | No |
 | `ES_ALLOW_DESTRUCTIVE` | `true` to also expose the irreversible tools. Default off. | No |
+| `ES_ECS_TOOLS` | `true` to also expose the ECS log search tools. Default off. | No |
+| `ES_ECS_INDEX_PATTERN` | Index pattern the ECS log tools query, e.g. `logs-app-*`. **No default**: with `ES_ECS_TOOLS` on and this unset, the server refuses to start. | Only with `ES_ECS_TOOLS` |
 
 > [!WARNING]
-> `ES_ADMIN_TOOLS` and `ES_ALLOW_DESTRUCTIVE` have **no un-prefixed legacy alias**,
+> `ES_ADMIN_TOOLS`, `ES_ALLOW_DESTRUCTIVE` and `ES_ECS_TOOLS` have **no un-prefixed legacy alias**,
 > unlike the connection variables above. That is deliberate: a bare `ADMIN_TOOLS`
 > or `ALLOW_DESTRUCTIVE` in an environment is far too easy to set by accident for
 > something that decides whether deletes are reachable.
@@ -458,6 +499,12 @@ client owns its stdin and stdout.
 * "Has anyone disabled shard allocation on this cluster?"
 * "Is a reindex still running?"
 
+#### ECS logs (needs `ES_ECS_TOOLS=true`)
+* "What errors has the billing service logged in the last hour?"
+* "When did the 5xx spike start, and is it still going?"
+* "Which hosts are producing these timeouts?"
+* "What log levels does this cluster actually index?"
+
 #### Destructive (needs `ES_ALLOW_DESTRUCTIVE=true`)
 * "Delete the 'smoke-test-source' index."
 * "Remove every document older than 2024 from 'logs-archive'."
@@ -472,6 +519,9 @@ client owns its stdin and stdout.
 | `Error: Authentication failed before any request was sent: …` on every tool | The token endpoint could not be reached, or refused the credentials. The message carries the provider's own `error` field. Nothing was sent to the cluster. |
 | `Error: … error="insufficient_scope", and asks for scope "…"` | The gateway wants a scope the token does not carry. Add it to `ES_OAUTH_SCOPE`. |
 | The client connects, but a diagnostic or delete tool is missing | That set is gated. Set `ES_ADMIN_TOOLS=true` or `ES_ALLOW_DESTRUCTIVE=true` and restart the client. |
+| `Server error: ... ES_ECS_INDEX_PATTERN is required` | `ES_ECS_TOOLS` is on with no pattern. There is deliberately no default — set it to the pattern holding your ECS logs. |
+| `search_logs` returns nothing, with no error | A keyword filter did not match the indexed spelling. `service.name`, `log.level` and the rest are exact and case-sensitive; run `top_values` on the field to see the real values. |
+| `top_values` refuses a field as "analysed text" | Aggregations need a keyword. Try `<field>.keyword`, or ask `field_caps` which fields the pattern reports as aggregatable. |
 | `Refusing to act on the pattern "logs-*"` | Working as intended: destructive tools take one concrete index name, never a pattern, even with the flag on. |
 | A connection error mentioning the product check | The cluster is 8.x, or unreachable. This build talks to 7.x only. |
 

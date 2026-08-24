@@ -34,6 +34,12 @@ import { getMappings } from "../src/tools/getMappings.js";
 import { listIndices } from "../src/tools/listIndices.js";
 import { reindex } from "../src/tools/reindex.js";
 import { search } from "../src/tools/search.js";
+import { fieldCaps } from "../src/tools/fieldCaps.js";
+import { analyze } from "../src/tools/analyze.js";
+import { searchLogs } from "../src/tools/ecs/searchLogs.js";
+import { logHistogram } from "../src/tools/ecs/logHistogram.js";
+import { errorSummary } from "../src/tools/ecs/errorSummary.js";
+import { topValues } from "../src/tools/ecs/topValues.js";
 import {
   capture,
   createMockedClient,
@@ -52,6 +58,12 @@ const TOOLS: [name: string, invoke: (client: Client) => Promise<ToolResult>][] =
   ["list_indices", (c) => listIndices(c)],
   ["get_mappings", (c) => getMappings(c, "logs")],
   ["search", (c) => search(c, "logs", { query: { match_all: {} } })],
+  ["field_caps", (c) => fieldCaps(c, "logs-*")],
+  ["analyze", (c) => analyze(c, "text", { index: "logs" })],
+  ["search_logs", (c) => searchLogs(c, "logs-*", {})],
+  ["log_histogram", (c) => logHistogram(c, "logs-*", {})],
+  ["error_summary", (c) => errorSummary(c, "logs-*", {})],
+  ["top_values", (c) => topValues(c, "logs-*", "log.level", {})],
   ["elasticsearch_health", (c) => getClusterHealth(c, true)],
   ["create_index", (c) => createIndex(c, "logs", { number_of_shards: 1 })],
   ["create_mapping", (c) => createMapping(c, "logs", { properties: {} })],

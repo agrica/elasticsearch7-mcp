@@ -184,6 +184,37 @@ export function failEveryRoute(mock: ClientMock): void {
 }
 
 /**
+ * Make one route fail with a specific Elasticsearch error.
+ *
+ * `failEveryRoute` provokes a generic 500; this exists for the cases where the
+ * *shape* of the error is the thing under test — a tool that translates a
+ * cluster message into a usable one has to be given the real message, including
+ * the `root_cause` nesting the reason actually arrives in.
+ */
+export function failRouteWith(
+  mock: ClientMock,
+  pattern: { method: string | string[]; path: string },
+  statusCode: number,
+  error: { type: string; reason: string; rootCause?: { type: string; reason: string } }
+): void {
+  mock.add(pattern, () => {
+    const body: Record<string, any> = {
+      error: { type: error.type, reason: error.reason },
+      status: statusCode,
+    };
+    if (error.rootCause) body.error.root_cause = [error.rootCause];
+
+    return new errors.ResponseError({
+      body,
+      statusCode,
+      headers: {},
+      warnings: null,
+      meta: {},
+    } as never);
+  });
+}
+
+/**
  * The first request a route captured, with a message worth reading when the
  * tool sent none — indexing straight into the array would fail later, on a
  * property of undefined.

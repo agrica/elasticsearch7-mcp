@@ -1,7 +1,7 @@
 # Recherche de logs ECS — design
 
 Date : 2026-08-25
-Statut : proposé, en attente de relecture
+Statut : validé et implémenté (0.3.0)
 Version cible : 0.3.0
 
 ## Problème
@@ -91,6 +91,10 @@ Les champs sur lesquels le module filtre et agrège sont donc tous des `keyword`
   d'une valeur qui n'est ni l'un ni l'autre. Isolé parce que les quatre outils le
   partagent et que c'est la seule logique de ce module qui mérite ses propres
   tests.
+- **`src/tools/ecs/logQuery.ts`** (nouveau, non prévu au spec initial) — le
+  `bool.filter` que les quatre outils partagent, et la description de ce qui a
+  réellement été filtré. Extrait pour la raison de `mappingFields.ts` : quatre
+  copies de la même construction est là où elles commencent à diverger.
 - **`src/tools/ecs/searchLogs.ts`**, **`logHistogram.ts`**,
   **`errorSummary.ts`**, **`topValues.ts`** (nouveaux) — un fichier par
   capacité, comme le reste de `src/tools/`.
@@ -164,9 +168,14 @@ non.
   `ECS_TOOLS` de quatre noms et deux entrées dans `DATA_TOOLS` ; les six outils
   entrent au tableau `TOOLS` de `test/toolContract.test.ts`, qui vérifie qu'aucun
   ne lève d'exception.
-- `pnpm run measure` — le coût du `tools/list` avec le jeu ECS activé, à reporter
-  dans le spec après mesure : c'est le chiffre qui dit si un quatrième jeu était
-  une bonne idée.
+- Le coût du `tools/list`, **mesuré** : 13 186 octets pour les 17 outils par
+  défaut, 21 553 pour les 21 avec le jeu ECS. Le module coûte donc **8 367
+  octets** par session, dont environ 7 200 de schémas — c'est-à-dire plus que
+  tout le jeu par défaut. L'essentiel est structurel : dix filtres décrits une
+  fois par outil. Une passe de raccourcissement des descriptions répétées en a
+  repris 724 ; le reste ne se récupère qu'en supprimant des paramètres. C'est
+  précisément le chiffre qui justifie le drapeau : un déploiement dont les logs
+  ne sont pas en ECS ne paie rien.
 
 ### Documentation
 
@@ -185,6 +194,21 @@ où un futur lecteur la cherchera).
 - **Toute écriture sur les logs.** Le module est en lecture seule, et ses outils
   seront annotés `readOnlyHint`.
 - **Un paramètre de DSL libre.** `search` le fait déjà.
+
+## Ce que l'implémentation a corrigé du design
+
+Deux points que seule la mesure a fait apparaître :
+
+- **`log_histogram` regroupe ses lignes cinquante par fragment.** Un fragment par
+  bucket paraissait bon — c'est la règle « le détail est découpé, jamais d'un
+  bloc » — mais le nombre de buckets n'est pas borné (1 minute sur 30 jours en
+  fait 43 200) et chaque fragment porte son propre enrobage sur le fil. Le
+  résultat dépassait le budget du nombre de ses propres fragments. Cinquante,
+  comme `chunkedJson`, pour la même raison.
+- **La détection du refus « fielddata » lit le corps de l'erreur, pas seulement
+  son message.** `ResponseError.message` ne contient que le *type* de l'erreur à
+  moins que `root_cause` ne soit un tableau (vérifié dans `lib/errors.js:93-104`),
+  et la phrase qui nomme fielddata est dans la cause racine.
 
 ## Interaction connue
 

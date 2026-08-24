@@ -11,9 +11,12 @@ import { createTokenProvider } from "./auth/oauth2.js";
 import { registerDataTools } from "./register/dataTools.js";
 import { registerAdminTools } from "./register/adminTools.js";
 import { registerDestructiveTools } from "./register/destructiveTools.js";
+import { registerEcsTools } from "./register/ecsTools.js";
 
 import { listIndices } from "./tools/listIndices.js";
 import { getMappings } from "./tools/getMappings.js";
+import { fieldCaps } from "./tools/fieldCaps.js";
+import { analyze } from "./tools/analyze.js";
 import { search } from "./tools/search.js";
 import { getClusterHealth } from "./tools/getClusterHealth.js";
 import { createIndex } from "./tools/createIndex.js";
@@ -45,6 +48,10 @@ import {
   getIndexTemplate,
   deleteIndexTemplate,
 } from "./tools/createIndexTemplate.js";
+import { searchLogs } from "./tools/ecs/searchLogs.js";
+import { logHistogram } from "./tools/ecs/logHistogram.js";
+import { errorSummary } from "./tools/ecs/errorSummary.js";
+import { topValues } from "./tools/ecs/topValues.js";
 
 export {
   listIndices,
@@ -73,9 +80,20 @@ export {
   createIndexTemplate,
   getIndexTemplate,
   deleteIndexTemplate,
+  fieldCaps,
+  analyze,
+  searchLogs,
+  logHistogram,
+  errorSummary,
+  topValues,
 };
 
-export { registerDataTools, registerAdminTools, registerDestructiveTools };
+export {
+  registerDataTools,
+  registerAdminTools,
+  registerDestructiveTools,
+  registerEcsTools,
+};
 
 // The authentication surface, exported for the same reason as the tools: a
 // library consumer, and `scripts/smoke.mjs`, need to build the client the way
@@ -114,7 +132,7 @@ export async function createElasticsearchMcpServer(
   // without reading the env of each entry.
   const server = new McpServer({
     name: "mcp-server-elasticsearch7",
-    version: "0.2.0",
+    version: "0.3.0",
     title: validated.instanceLabel
       ? `Elasticsearch 7.x — ${validated.instanceLabel}`
       : "Elasticsearch 7.x",
@@ -128,6 +146,13 @@ export async function createElasticsearchMcpServer(
 
   if (validated.allowDestructive) {
     registerDestructiveTools(server, clientSource);
+  }
+
+  // The pattern is fixed here rather than passed per call: which indices this
+  // server may search is the operator's decision, and a tool argument would let
+  // the calling model widen it.
+  if (validated.ecsTools) {
+    registerEcsTools(server, clientSource, validated.ecsIndexPattern);
   }
 
   // stderr, never stdout: stdout carries the MCP protocol. An operator needs to
@@ -174,6 +199,10 @@ export async function createElasticsearchMcpServer(
       validated.adminTools ? "ON" : "OFF (set ES_ADMIN_TOOLS=true)"
     } | destructive ${
       validated.allowDestructive ? "ON" : "OFF (set ES_ALLOW_DESTRUCTIVE=true)"
+    } | ECS logs ${
+      validated.ecsTools
+        ? `ON (${validated.ecsIndexPattern})`
+        : "OFF (set ES_ECS_TOOLS=true)"
     }`
   );
 

@@ -13,6 +13,7 @@ import { createElasticsearchMcpServer } from "../src/server.js";
  * No cluster is contacted — building the server only constructs an ES client.
  */
 const DATA_TOOLS = [
+  "analyze",
   "bulk",
   "cluster_info",
   "count",
@@ -20,6 +21,7 @@ const DATA_TOOLS = [
   "create_index_template",
   "create_mapping",
   "elasticsearch_health",
+  "field_caps",
   "get_aliases",
   "get_document",
   "get_index_template",
@@ -38,6 +40,13 @@ const ADMIN_TOOLS = [
   "list_nodes",
   "list_shards",
   "list_tasks",
+];
+
+const ECS_TOOLS = [
+  "error_summary",
+  "log_histogram",
+  "search_logs",
+  "top_values",
 ];
 
 const DESTRUCTIVE_TOOLS = [
@@ -372,6 +381,82 @@ describe("MCP server registration", () => {
     const { client } = await connectedClient();
 
     expect(client.getServerVersion()?.title).toBe("Elasticsearch 7.x");
+    await client.close();
+  });
+
+  it("keeps the ECS log tools off until ES_ECS_TOOLS enables them", async () => {
+    const { client } = await connectedClient();
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+
+    // A cluster whose logs are not in ECS would otherwise pay for four tool
+    // schemas that can only ever return nothing.
+    for (const tool of ECS_TOOLS) {
+      expect(names, `${tool} must not be registered by default`).not.toContain(tool);
+    }
+    await client.close();
+  });
+
+  it("registers the ECS log tools when the flag and the pattern are both set", async () => {
+    const { client } = await connectedClient({
+      ecsTools: true,
+      ecsIndexPattern: "logs-app-*",
+    });
+    const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
+
+    expect(names).toEqual([...DATA_TOOLS, ...ECS_TOOLS].sort());
+    await client.close();
+  });
+
+  it("refuses to start when the ECS tools are on without an index pattern", async () => {
+    // Deliberately the harsh treatment — the one a partial OAuth2 block gets,
+    // not the one a malformed ES_MAX_RETRIES gets. A guess like `logs-*` is not
+    // a default: it would sweep whichever indices happen to match and answer
+    // confidently from the wrong data.
+    await expect(
+      createElasticsearchMcpServer({
+        urls: ["http://127.0.0.1:1"],
+        ecsTools: true,
+      })
+    ).rejects.toThrow(/ES_ECS_INDEX_PATTERN/);
+  });
+
+  it("marks every ECS log tool read-only", async () => {
+    const { client } = await connectedClient({
+      ecsTools: true,
+      ecsIndexPattern: "logs-app-*",
+    });
+    const { tools } = await client.listTools();
+
+    for (const name of ECS_TOOLS) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.annotations?.readOnlyHint, `${name} must be read-only`).toBe(true);
+    }
+    await client.close();
+  });
+
+  it("tells the caller that error grouping is by type, and why", async () => {
+    // The fact a caller cannot infer and gets wrong: ECS 1.x maps error.message
+    // as text with no keyword sub-field, so grouping by message is impossible.
+    const { client } = await connectedClient({
+      ecsTools: true,
+      ecsIndexPattern: "logs-app-*",
+    });
+    const { tools } = await client.listTools();
+
+    const summary = tools.find((tool) => tool.name === "error_summary");
+    expect(summary?.description).toMatch(/error\.type/);
+    expect(summary?.description).toMatch(/keyword sub-field/);
+    await client.close();
+  });
+
+  it("says field_caps takes a wildcard, which get_mappings does not", async () => {
+    const { client } = await connectedClient();
+    const { tools } = await client.listTools();
+
+    const caps = tools.find((tool) => tool.name === "field_caps");
+    expect(caps?.description).toMatch(/wildcard/i);
+    // The reason it earns its place: a type conflict is invisible otherwise.
+    expect(caps?.description).toMatch(/two different types|more than one type/i);
     await client.close();
   });
 

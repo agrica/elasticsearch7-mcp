@@ -63,6 +63,43 @@ export function logHits(count = 500) {
   }));
 }
 
+/**
+ * ECS log events, at the shape and size a real one arrives in.
+ *
+ * Distinct from `logHits`, which predates this module and uses flat field names:
+ * these carry the dotted ECS paths the log tools actually read, plus the stack
+ * trace that is the largest field in an error document — which is the whole
+ * reason `search_logs` does not request it by default.
+ */
+export function ecsLogHits(count = 500) {
+  const services = ["billing", "checkout", "catalogue", "auth"];
+  return Array.from({ length: count }, (_, i) => ({
+    _index: `logs-app-2026.08.${(i % 28) + 1}`,
+    _id: String(i),
+    _score: null,
+    _source: {
+      "@timestamp": "2026-08-25T10:00:00.000Z",
+      "log.level": i % 4 === 0 ? "ERROR" : "INFO",
+      "log.logger": "com.example.pool.LeaseManager",
+      "service.name": services[i % services.length],
+      "service.environment": "production",
+      "host.name": `srv-${i % 20}`,
+      "event.dataset": "app.log",
+      "trace.id": `4bf92f3577b34da6a3ce929d0e0e4736${i % 10}`,
+      "error.type": "com.example.pool.PoolExhaustedException",
+      message:
+        `Connection pool exhausted while acquiring a lease for tenant ${i} ` +
+        `after 30000ms; retrying`,
+      "error.message": `No lease available for tenant ${i} within 30000ms`,
+      "error.stack_trace":
+        "com.example.pool.PoolExhaustedException: no lease available\n" +
+        "\tat com.example.pool.LeaseManager.acquire(LeaseManager.java:142)\n" +
+        "\tat com.example.svc.BillingService.charge(BillingService.java:88)\n" +
+        "\tat com.example.web.Handler.handle(Handler.java:31)",
+    },
+  }));
+}
+
 export function nodesFor(count = 24) {
   return Array.from({ length: count }, (_, i) => ({
     name: `es-node-${i + 1}`,

@@ -180,6 +180,8 @@ describe("loadConfigFromEnv", () => {
     "ES_OAUTH_SCOPE", "SCOPE",
     "ES_OAUTH_AUDIENCE", "AUDIENCE",
     "ES_OAUTH_AUTH_STYLE",
+    "ES_ECS_TOOLS", "ECS_TOOLS",
+    "ES_ECS_INDEX_PATTERN", "ECS_INDEX_PATTERN",
   ];
   let saved: Record<string, string | undefined>;
 
@@ -343,4 +345,65 @@ describe("loadConfigFromEnv", () => {
     expect(config.urls).toEqual([""]);
     expect(() => createClientOptions(config)).toThrow();
   });
+    it("reads ES_ECS_TOOLS and ES_ECS_INDEX_PATTERN", () => {
+      process.env.ES_HOST = "http://localhost:9200";
+      process.env.ES_ECS_TOOLS = "true";
+      process.env.ES_ECS_INDEX_PATTERN = "logs-app-*";
+
+      const config = loadConfigFromEnv();
+
+      expect(config.ecsTools).toBe(true);
+      expect(config.ecsIndexPattern).toBe("logs-app-*");
+    });
+
+    it("stays off for anything other than true or 1", () => {
+      process.env.ES_HOST = "http://localhost:9200";
+
+      for (const value of ["yes", "TRUE ", "on", "0", "false", ""]) {
+        process.env.ES_ECS_TOOLS = value;
+        const expected = value.trim().toLowerCase() === "true";
+        expect(loadConfigFromEnv().ecsTools, `"${value}"`).toBe(expected);
+      }
+    });
+
+    it("has no un-prefixed fallback", () => {
+      // The ES_ADMIN_TOOLS reason: an ambient ECS_TOOLS must not decide this
+      // server's surface.
+      process.env.ES_HOST = "http://localhost:9200";
+      process.env.ECS_TOOLS = "true";
+      process.env.ECS_INDEX_PATTERN = "everything-*";
+
+      const config = loadConfigFromEnv();
+
+      expect(config.ecsTools).toBe(false);
+      expect(config.ecsIndexPattern).toBe("");
+    });
+
+    /**
+     * The refusal, and why it is a refusal rather than a default. A guess like
+     * `logs-*` would sweep whichever indices happen to match on this cluster and
+     * answer confidently from the wrong data — worse than not starting. This is
+     * deliberately the treatment a partial OAuth2 block gets, not the one a
+     * malformed ES_MAX_RETRIES gets: the difference is whether a safe default
+     * exists.
+     */
+    it("refuses to validate when the flag is on and the pattern is missing", () => {
+      expect(() =>
+        ConfigSchema.parse({ urls: ["http://localhost:9200"], ecsTools: true })
+      ).toThrow(/ES_ECS_INDEX_PATTERN/);
+
+      expect(() =>
+        ConfigSchema.parse({
+          urls: ["http://localhost:9200"],
+          ecsTools: true,
+          ecsIndexPattern: "   ",
+        })
+      ).toThrow(/ES_ECS_INDEX_PATTERN/);
+    });
+
+    it("says nothing when the flag is off, whatever the pattern", () => {
+      expect(() =>
+        ConfigSchema.parse({ urls: ["http://localhost:9200"], ecsTools: false })
+      ).not.toThrow();
+    });
 });

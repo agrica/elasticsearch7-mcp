@@ -6,6 +6,8 @@ import { indexName, requiredText } from "./schemas.js";
 import { GET_MAPPINGS_OUTPUT, LIST_INDICES_OUTPUT } from "./outputSchemas.js";
 import { listIndices } from "../tools/listIndices.js";
 import { getMappings } from "../tools/getMappings.js";
+import { fieldCaps } from "../tools/fieldCaps.js";
+import { analyze } from "../tools/analyze.js";
 import { search } from "../tools/search.js";
 import { getClusterHealth } from "../tools/getClusterHealth.js";
 import { createIndex } from "../tools/createIndex.js";
@@ -70,6 +72,55 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => call(extra, (es) => getMappings(es, index))
+  );
+
+  // The same question across a pattern, which get_mappings cannot answer
+  server.registerTool(
+    "field_caps",
+    {
+      title: "Field capabilities",
+      description: "Which fields exist across an index pattern and whether each is searchable and aggregatable. Takes a wildcard, unlike get_mappings, and is the only way to see a field mapped as two different types across indices — which makes an aggregation over it silently partial rather than failing.",
+      inputSchema: {
+        index: indexName("Index, alias or wildcard, e.g. logs-app-*"),
+
+        fields: z
+          .string()
+          .optional()
+          .describe("Field name or wildcard to ask about, e.g. log.* — comma-separated for several. Defaults to every field."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ index, fields }, extra) => call(extra, (es) => fieldCaps(es, index, fields))
+  );
+
+  // Why a query does not match
+  server.registerTool(
+    "analyze",
+    {
+      title: "Analyze text",
+      description: "Show the terms a text is broken into, which is what a query must produce to match. Pass field with index to use the analyzer that index really applies to that field; that is the form that explains a search returning nothing.",
+      inputSchema: {
+        text: requiredText("Text to analyze", "Text is required"),
+
+        index: z
+          .string()
+          .optional()
+          .describe("Index whose analyzers to use. Required with field."),
+
+        field: z
+          .string()
+          .optional()
+          .describe("Use this field's analyzer, taken from the index mapping."),
+
+        analyzer: z
+          .string()
+          .optional()
+          .describe("Named analyzer to test instead, e.g. standard, french."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ text, index, field, analyzer }, extra) =>
+      call(extra, (es) => analyze(es, text, { index, field, analyzer }))
   );
 
   // search with query DSL

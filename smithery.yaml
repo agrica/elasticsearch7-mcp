@@ -79,6 +79,18 @@ startCommand:
         default: false
         description: Expose the irreversible tools (delete_index, delete_document,
           delete_by_query, delete_index_template). Leave false in production.
+      esEcsTools:
+        type: boolean
+        default: false
+        description: Expose the ECS log search tools (search_logs, log_histogram,
+          error_summary, top_values). Read-only, and only meaningful when your
+          application logs are indexed in ECS. Requires esEcsIndexPattern.
+      esEcsIndexPattern:
+        type: string
+        default: ""
+        description: Index pattern the ECS log tools query, e.g. logs-app-*. No
+          default on purpose - with esEcsTools on and this empty, the server
+          refuses to start rather than sweeping whichever indices happen to match.
   commandFunction:
     # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
     |-
@@ -108,7 +120,9 @@ startCommand:
         // Absent or anything other than "true"/"1" means off; the server only
         // registers a gated tool when the flag is explicitly on.
         ES_ADMIN_TOOLS: config.esAdminTools ? 'true' : 'false',
-        ES_ALLOW_DESTRUCTIVE: config.esAllowDestructive ? 'true' : 'false'
+        ES_ALLOW_DESTRUCTIVE: config.esAllowDestructive ? 'true' : 'false',
+        ES_ECS_TOOLS: config.esEcsTools ? 'true' : 'false',
+        ES_ECS_INDEX_PATTERN: config.esEcsIndexPattern || ''
       };
       return {
         command: 'node',
@@ -127,3 +141,5 @@ startCommand:
     esMaxResultBytes: 32768
     esAdminTools: true
     esAllowDestructive: false
+    esEcsTools: true
+    esEcsIndexPattern: logs-app-*

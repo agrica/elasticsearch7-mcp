@@ -4,9 +4,12 @@ import { listIndices } from "../src/tools/listIndices.js";
 import { listNodes, listShards } from "../src/tools/diagnostics.js";
 import { search } from "../src/tools/search.js";
 import { getMappings } from "../src/tools/getMappings.js";
+import { searchLogs } from "../src/tools/ecs/searchLogs.js";
+import { logHistogram } from "../src/tools/ecs/logHistogram.js";
 import { capture, createMockedClient, textOf } from "./support/mockClient.js";
 import {
   dailyIndices,
+  ecsLogHits,
   logHits,
   nodesFor,
   resultBytes,
@@ -182,6 +185,75 @@ describe("output at cluster scale", () => {
 
     expect(textOf(result)).toContain("1000 fields");
     expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+  });
+
+  it("keeps search_logs under budget on 500 ECS events", async () => {
+    const { client, mock } = createMockedClient();
+    const hits = ecsLogHits(500);
+    capture(mock, { method: "POST", path: "/logs-app-*/_search" }, {
+      took: 12,
+      hits: { total: { value: 240_000, relation: "eq" }, hits },
+    });
+
+    // The tool clamps to 100 before the budget ever sees the result — a clamp is
+    // visible in the reported count, where a trimmed tail leaves the caller
+    // guessing where it stopped.
+    const result = await searchLogs(client, "logs-app-*", { limit: 500 });
+
+    expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+    expect(textOf(result)).toContain("240000 matching events");
+  });
+
+  it("does not pay for the stack trace unless it will be printed", async () => {
+    const { client, mock } = createMockedClient();
+    // Twenty, not a hundred: both results have to stay clear of the ceiling for
+    // the comparison to measure the stack trace rather than the budget.
+    const hits = ecsLogHits(20);
+    const route = { method: "POST", path: "/logs-app-*/_search" };
+
+    // The mock returns the same documents either way, so this measures what the
+    // *rendering* costs — the request-side saving is asserted in
+    // test/searchLogs.test.ts, where `_source` is inspected.
+    const quiet = capture(mock, route, {
+      took: 12,
+      hits: { total: { value: 20, relation: "eq" }, hits },
+    });
+    const plain = await searchLogs(client, "logs-app-*", {});
+    const verbose = await searchLogs(client, "logs-app-*", { verbose: true });
+
+    expect(quiet.requests).toHaveLength(2);
+    expect(resultBytes(plain)).toBeLessThan(CEILING);
+    expect(resultBytes(verbose)).toBeLessThan(CEILING);
+    // The stack trace is the largest field in an ECS error document: printing it
+    // more than doubles the answer, which is why it is opt-in on both the
+    // request and the rendering.
+    expect(resultBytes(verbose)).toBeGreaterThan(resultBytes(plain) * 2);
+  });
+
+  it("keeps a histogram bounded when the caller asks for a minute over a month", async () => {
+    const { client, mock } = createMockedClient();
+    // 43 200 buckets: what a 1m interval over 30 days produces. The derived
+    // interval would have been 1d, so this is the deliberate-override path.
+    const buckets = Array.from({ length: 43_200 }, (_, i) => ({
+      key_as_string: `2026-08-25T${String(i % 24).padStart(2, "0")}:00:00.000Z`,
+      key: i,
+      doc_count: i % 7,
+    }));
+    capture(mock, { method: "POST", path: "/logs-app-*/_search" }, {
+      took: 30,
+      hits: { total: { value: 0, relation: "eq" }, hits: [] },
+      aggregations: { over_time: { buckets } },
+    });
+
+    const result = await logHistogram(client, "logs-app-*", {
+      since: "30d",
+      interval: "1m",
+    });
+
+    expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+    // And the trim is announced, so a model does not read the shortened series
+    // as the whole window.
+    expect(textOf(result)).toMatch(/omitted|not shown|interval/i);
   });
 
   it("leaves list_nodes alone, because nodes were never the hazard", async () => {

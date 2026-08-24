@@ -81,10 +81,14 @@ ENV ES_INSTANCE_LABEL=""
 ENV ES_REQUEST_TIMEOUT=""
 ENV ES_MAX_RETRIES=""
 ENV ES_MAX_RESULT_BYTES=""
-# Both tool gates default to off: an image pulled and run with no further
+# Every tool gate defaults to off: an image pulled and run with no further
 # thought exposes read-and-search tools only.
 ENV ES_ADMIN_TOOLS="false"
 ENV ES_ALLOW_DESTRUCTIVE="false"
+ENV ES_ECS_TOOLS="false"
+# Empty on purpose, and fatal if ES_ECS_TOOLS is on without it. A default here
+# would be a guess at which indices hold your logs.
+ENV ES_ECS_INDEX_PATTERN=""
 
 # The `node` user ships with the image; nothing here needs root.
 USER node

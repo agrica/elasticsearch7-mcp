@@ -56,6 +56,12 @@ import {
   listShards,
   listNodes,
   explainAllocation,
+  fieldCaps,
+  analyze,
+  searchLogs,
+  logHistogram,
+  errorSummary,
+  topValues,
   deleteIndex,
   deleteDocument,
   deleteByQuery,
@@ -100,7 +106,7 @@ function failed(result) {
 
   if (textLooksLikeFailure) {
     console.error(
-      "  (ce résultat porte un texte d'erreur sans isError — le drapeau manque)"
+      "  (this result carries error text without isError — the flag is missing)"
     );
     return true;
   }
@@ -242,7 +248,42 @@ if (sampleIndex) {
     "get_index_settings",
     "get_index_stats",
   ]) {
-    skip(tool, "aucun index non-système trouvé sur le cluster");
+    skip(tool, "no non-system index found on the cluster");
+  }
+}
+
+if (sampleIndex) {
+  await check(`field_caps (${sampleIndex})`, () => fieldCaps(esClient, sampleIndex));
+  await check(`analyze (${sampleIndex})`, () =>
+    analyze(esClient, "Connection refused", { index: sampleIndex })
+  );
+} else {
+  for (const tool of ["field_caps", "analyze"]) {
+    skip(tool, "no non-system index found on the cluster");
+  }
+}
+
+// The ECS log tools, which only mean anything against an ECS index pattern. The
+// pattern comes from the same variable the server reads, so a smoke run
+// exercises exactly what a deployment would.
+const ecsPattern = process.env.ES_ECS_INDEX_PATTERN ?? "";
+
+if (ecsPattern) {
+  await check(`search_logs (${ecsPattern})`, () =>
+    searchLogs(esClient, ecsPattern, { since: "24h", limit: 5 })
+  );
+  await check(`log_histogram (${ecsPattern})`, () =>
+    logHistogram(esClient, ecsPattern, { since: "24h" })
+  );
+  await check(`error_summary (${ecsPattern})`, () =>
+    errorSummary(esClient, ecsPattern, { since: "24h" })
+  );
+  await check(`top_values (${ecsPattern}, log.level)`, () =>
+    topValues(esClient, ecsPattern, "log.level", { since: "24h" })
+  );
+} else {
+  for (const tool of ["search_logs", "log_histogram", "error_summary", "top_values"]) {
+    skip(tool, "ES_ECS_INDEX_PATTERN is not set");
   }
 }
 
@@ -304,7 +345,7 @@ if (!writePrefix) {
     );
 
     // bulk uses refresh: true, so the documents must already be searchable.
-    await check(`search (${target}, après bulk)`, () =>
+    await check(`search (${target}, after bulk)`, () =>
       search(esClient, target, { size: 5, query: { match: { message: "fumée" } } })
     );
 
@@ -380,7 +421,7 @@ if (!writePrefix) {
 }
 
 console.log(
-  `\n${failures === 0 ? "Tous les contrôles exécutés sont passés" : `${failures} contrôle(s) en échec`}${
+  `\n${failures === 0 ? "Every check that ran passed" : `${failures} check(s) failed`}${
     skipped > 0 ? ` — ${skipped} ignoré(s)` : ""
   }.`
 );

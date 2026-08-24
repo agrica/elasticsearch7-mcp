@@ -20,9 +20,11 @@ import { readFileSync } from "node:fs";
  * one that appears unexpectedly. That second half is the valuable one, because
  * it is what catches a diagnostic or destructive tool leaking into a default
  * deployment. `delete_index_template` is deliberately absent: it moved behind
- * ES_ALLOW_DESTRUCTIVE.
+ * ES_ALLOW_DESTRUCTIVE, and so are the four ECS log tools, which need
+ * ES_ECS_TOOLS and an index pattern.
  */
 const EXPECTED_TOOLS = [
+  "analyze",
   "bulk",
   "cluster_info",
   "count",
@@ -30,6 +32,7 @@ const EXPECTED_TOOLS = [
   "create_index_template",
   "create_mapping",
   "elasticsearch_health",
+  "field_caps",
   "get_aliases",
   "get_document",
   "get_index_template",

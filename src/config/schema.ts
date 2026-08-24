@@ -122,6 +122,19 @@ export const ConfigSchema = z
       .default(false)
       .describe("Expose the tools that delete indices, documents or templates"),
 
+    ecsTools: z
+      .boolean()
+      .default(false)
+      .describe("Expose the ECS log search tools (search_logs, log_histogram, error_summary, top_values)"),
+
+    ecsIndexPattern: z
+      .string()
+      .trim()
+      .default("")
+      .describe(
+        "Index pattern the ECS log tools query, e.g. logs-app-*. Required when ecsTools is on, and deliberately without a default."
+      ),
+
     requestTimeoutMs: z
       .number()
       .int()
@@ -158,6 +171,27 @@ export const ConfigSchema = z
       .describe(
         "Free-text name of the deployment, e.g. production or staging. Surfaced as the server title so a client listing several instances can tell them apart."
       ),
+  })
+  /**
+   * The ECS log tools have no default index pattern, and refuse to start without
+   * one.
+   *
+   * This is deliberately the harsh treatment, the one a partial OAuth2 block
+   * gets rather than the one a malformed `ES_MAX_RETRIES` gets. The difference is
+   * whether a safe default exists. A guess like `logs-*` is not a default: it
+   * would sweep whichever indices happen to match on this cluster and answer
+   * confidently from the wrong data, which is worse than not starting.
+   */
+  .superRefine((config, ctx) => {
+    if (config.ecsTools && config.ecsIndexPattern.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["ecsIndexPattern"],
+        message:
+          "ES_ECS_INDEX_PATTERN is required when ES_ECS_TOOLS is on, and has no default: " +
+          "set it to the pattern holding your ECS logs, e.g. logs-app-*",
+      });
+    }
   });
 
 /**
@@ -333,6 +367,10 @@ export function loadConfigFromEnv(): ElasticsearchConfigInput {
     caCert: process.env.ES_CA_CERT || process.env.CA_CERT || "",
     adminTools: readFlag(process.env.ES_ADMIN_TOOLS),
     allowDestructive: readFlag(process.env.ES_ALLOW_DESTRUCTIVE),
+    // No un-prefixed fallback, for the ES_ADMIN_TOOLS reason: an ambient
+    // ECS_TOOLS must not decide this server's surface.
+    ecsTools: readFlag(process.env.ES_ECS_TOOLS),
+    ecsIndexPattern: process.env.ES_ECS_INDEX_PATTERN ?? "",
     instanceLabel: process.env.ES_INSTANCE_LABEL ?? "",
     requestTimeoutMs: readNumber("ES_REQUEST_TIMEOUT", process.env.ES_REQUEST_TIMEOUT),
     maxRetries: readNumber("ES_MAX_RETRIES", process.env.ES_MAX_RETRIES),
