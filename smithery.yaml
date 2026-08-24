@@ -26,6 +26,10 @@ startCommand:
         type: string
         description: Path to custom CA certificate for ES SSL/TLS (optional, or legacy
           CA_CERT)
+      esInstanceLabel:
+        type: string
+        description: Free-text name of this deployment, e.g. production or staging.
+          Becomes the server title, so several instances are distinguishable.
       esAdminTools:
         type: boolean
         default: false
@@ -48,6 +52,7 @@ startCommand:
         ES_USERNAME: config.esUsername || '',
         ES_PASSWORD: config.esPassword || '',
         ES_CA_CERT: config.esCaCert || '',
+        ES_INSTANCE_LABEL: config.esInstanceLabel || '',
         // Absent or anything other than "true"/"1" means off; the server only
         // registers a gated tool when the flag is explicitly on.
         ES_ADMIN_TOOLS: config.esAdminTools ? 'true' : 'false',
@@ -65,5 +70,6 @@ startCommand:
     esUsername: user
     esPassword: password
     esCaCert: /path/to/ca.crt
+    esInstanceLabel: production
     esAdminTools: true
     esAllowDestructive: false

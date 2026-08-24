@@ -87,9 +87,16 @@ export async function createElasticsearchMcpServer(
   const validated = ConfigSchema.parse(config);
   const esClient = new Client(createClientOptions(validated));
 
+  // `title` is the display name a client shows. ES_INSTANCE_LABEL goes here so
+  // an operator running this server against several clusters — production and
+  // staging both declared in one mcpServers block — can tell which is which
+  // without reading the env of each entry.
   const server = new McpServer({
     name: "mcp-server-elasticsearch7",
     version: "0.1.0",
+    title: validated.instanceLabel
+      ? `Elasticsearch 7.x — ${validated.instanceLabel}`
+      : "Elasticsearch 7.x",
   });
 
   registerDataTools(server, esClient);
@@ -104,6 +111,9 @@ export async function createElasticsearchMcpServer(
 
   // stderr, never stdout: stdout carries the MCP protocol. An operator needs to
   // be able to tell which sets are live without calling tools/list.
+  console.error(
+    `Instance: ${validated.instanceLabel || "(unlabelled — set ES_INSTANCE_LABEL)"}`
+  );
   console.error(
     `Tool sets: data (always) | diagnostics ${
       validated.adminTools ? "ON" : "OFF (set ES_ADMIN_TOOLS=true)"

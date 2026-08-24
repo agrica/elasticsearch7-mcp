@@ -1,5 +1,10 @@
 import { Client, estypes } from "@elastic/elasticsearch";
-import { textFragment, toolError, type ToolResult } from "../toolResult.js";
+import {
+  textFragment,
+  toolError,
+  toolRefusal,
+  type ToolResult,
+} from "../toolResult.js";
 
 /**
  * These tools are registered only when ES_ALLOW_DESTRUCTIVE is set. The guard
@@ -30,7 +35,7 @@ export async function deleteIndex(
   try {
     const refusal = rejectBulkTarget(index);
     if (refusal) {
-      return { content: [textFragment(`Error: ${refusal}`)] };
+      return toolRefusal(refusal);
     }
 
     const response = await esClient.indices.delete<
@@ -59,7 +64,7 @@ export async function deleteDocument(
   try {
     const refusal = rejectBulkTarget(index);
     if (refusal) {
-      return { content: [textFragment(`Error: ${refusal}`)] };
+      return toolRefusal(refusal);
     }
 
     // 404 is an answer here, not a failure: the document is already gone.
@@ -90,7 +95,7 @@ export async function deleteByQuery(
   try {
     const refusal = rejectBulkTarget(index);
     if (refusal) {
-      return { content: [textFragment(`Error: ${refusal}`)] };
+      return toolRefusal(refusal);
     }
 
     const response = await esClient.deleteByQuery<

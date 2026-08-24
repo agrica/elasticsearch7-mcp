@@ -47,7 +47,11 @@ const DESTRUCTIVE_TOOLS = [
 ];
 
 async function connectedClient(
-  flags: { adminTools?: boolean; allowDestructive?: boolean } = {}
+  flags: {
+    adminTools?: boolean;
+    allowDestructive?: boolean;
+    instanceLabel?: string;
+  } = {}
 ) {
   // Port 1 cannot be bound without privileges, so the connection is refused
   // instantly and identically everywhere. Pointing at localhost:9200 would make
@@ -205,6 +209,93 @@ describe("MCP server registration", () => {
     expect(names).toEqual(
       [...DATA_TOOLS, ...ADMIN_TOOLS, ...DESTRUCTIVE_TOOLS].sort()
     );
+    await client.close();
+  });
+
+  it("gives every tool a title and behaviour annotations", async () => {
+    const { client } = await connectedClient({
+      adminTools: true,
+      allowDestructive: true,
+    });
+    const { tools } = await client.listTools();
+
+    for (const tool of tools) {
+      expect(tool.title, `${tool.name} has no title`).toBeTruthy();
+      expect(tool.annotations, `${tool.name} has no annotations`).toBeTruthy();
+      // openWorldHint is true for every tool here: they all act on a cluster
+      // whose state changes outside this server's control.
+      expect(tool.annotations?.openWorldHint).toBe(true);
+    }
+    await client.close();
+  });
+
+  it("annotates the whole diagnostic set as read-only, which is its premise", async () => {
+    // ES_ADMIN_TOOLS is documented as safe to enable in production *because*
+    // these only read. That claim was prose; this makes it checkable, so a
+    // future tool added to the wrong set fails here instead of being enabled on
+    // a production cluster on the strength of a paragraph.
+    const { client } = await connectedClient({ adminTools: true });
+    const { tools } = await client.listTools();
+
+    for (const name of ADMIN_TOOLS) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.annotations?.readOnlyHint, `${name} must be read-only`).toBe(true);
+      expect(tool?.annotations?.destructiveHint, `${name} must not be destructive`).not.toBe(true);
+    }
+    await client.close();
+  });
+
+  it("marks every destructive tool destructive, and none of the others", async () => {
+    const { client } = await connectedClient({
+      adminTools: true,
+      allowDestructive: true,
+    });
+    const { tools } = await client.listTools();
+
+    const destructive = tools
+      .filter((tool) => tool.annotations?.destructiveHint === true)
+      .map((tool) => tool.name)
+      .sort();
+
+    // Exact, both ways: a delete missing the hint gets no confirmation prompt
+    // from a client that offers one, and a read tool wrongly carrying it
+    // trains the user to click through the prompt.
+    expect(destructive).toEqual([...DESTRUCTIVE_TOOLS].sort());
+    for (const name of DESTRUCTIVE_TOOLS) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.annotations?.readOnlyHint, `${name} cannot be read-only`).toBe(false);
+    }
+    await client.close();
+  });
+
+  it("does not claim idempotence where a second call fails", async () => {
+    // create_index fails when the index exists, and delete_index 404s once the
+    // index is gone. A client that retries on the strength of idempotentHint
+    // would turn a success into an error.
+    const { client } = await connectedClient({ allowDestructive: true });
+    const { tools } = await client.listTools();
+
+    for (const name of ["create_index", "delete_index", "bulk", "reindex"]) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.annotations?.idempotentHint, `${name} is not idempotent`).toBe(false);
+    }
+    await client.close();
+  });
+
+  it("carries the instance label into the server title", async () => {
+    // One mcpServers block often declares the same server twice, against a
+    // production cluster and a staging one. The title is what tells them apart
+    // in a client, without reading each entry's environment.
+    const { client } = await connectedClient({ instanceLabel: "staging" });
+
+    expect(client.getServerVersion()?.title).toBe("Elasticsearch 7.x — staging");
+    await client.close();
+  });
+
+  it("falls back to a plain title when no label is set", async () => {
+    const { client } = await connectedClient();
+
+    expect(client.getServerVersion()?.title).toBe("Elasticsearch 7.x");
     await client.close();
   });
 

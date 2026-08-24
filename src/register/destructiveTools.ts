@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Client } from "@elastic/elasticsearch";
+import { withCancellation } from "../cancellable.js";
 import {
   deleteByQuery,
   deleteDocument,
@@ -21,77 +22,100 @@ export function registerDestructiveTools(
   server: McpServer,
   esClient: Client
 ): void {
+  // Every handler reaches the cluster through this. The client it returns aborts
+  // its in-flight request when the MCP client cancels the call — see
+  // src/cancellable.ts for why that is bound to the client and not threaded
+  // through each tool's arguments.
+  const es = (extra: { signal: AbortSignal }) =>
+    withCancellation(esClient, extra.signal);
+
   // Delete an index template
-  server.tool(
+  server.registerTool(
     "delete_index_template",
-    "Delete a composable index template. Indices already created keep their settings.",
     {
-      name: z
-        .string()
-        .trim()
-        .min(1, "Template name is required")
-        .describe("Template name")
+      title: "Delete an index template",
+      description: "Delete a composable index template. Indices already created keep their settings.",
+      inputSchema: {
+        name: z
+          .string()
+          .trim()
+          .min(1, "Template name is required")
+          .describe("Template name")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ name }) => {
-      return await deleteIndexTemplate(esClient, name);
+    async ({ name }, extra) => {
+      return await deleteIndexTemplate(es(extra), name);
     }
   );
 
   // Delete an index and everything in it
-  server.tool(
+  server.registerTool(
     "delete_index",
-    "Delete an index and every document in it. Irreversible. One concrete index name only: wildcards and lists are refused.",
     {
-      index: z
-        .string()
-        .trim()
-        .min(1, "Index name is required")
-        .describe("Exact index name. No wildcard, no comma-separated list."),
+      title: "Delete an index",
+      description: "Delete an index and every document in it. Irreversible. One concrete index name only: wildcards and lists are refused.",
+      inputSchema: {
+        index: z
+          .string()
+          .trim()
+          .min(1, "Index name is required")
+          .describe("Exact index name. No wildcard, no comma-separated list."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ index }) => {
-      return await deleteIndex(esClient, index);
+    async ({ index }, extra) => {
+      return await deleteIndex(es(extra), index);
     }
   );
 
   // Delete one document
-  server.tool(
+  server.registerTool(
     "delete_document",
-    "Delete one document by its _id. Irreversible, though a missing document is reported rather than treated as a failure.",
     {
-      index: z
-        .string()
-        .trim()
-        .min(1, "Index name is required")
-        .describe("Exact index name"),
+      title: "Delete a document",
+      description: "Delete one document by its _id. Irreversible, though a missing document is reported rather than treated as a failure.",
+      inputSchema: {
+        index: z
+          .string()
+          .trim()
+          .min(1, "Index name is required")
+          .describe("Exact index name"),
 
-      id: z
-        .string()
-        .trim()
-        .min(1, "Document id is required")
-        .describe("Document _id"),
+        id: z
+          .string()
+          .trim()
+          .min(1, "Document id is required")
+          .describe("Document _id"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, id }) => {
-      return await deleteDocument(esClient, index, id);
+    async ({ index, id }, extra) => {
+      return await deleteDocument(es(extra), index, id);
     }
   );
 
   // Delete everything a query matches
-  server.tool(
+  server.registerTool(
     "delete_by_query",
-    "Delete every document a query matches. Irreversible and unbounded: run count with the same query first to see how many would go.",
     {
-      index: z
-        .string()
-        .trim()
-        .min(1, "Index name is required")
-        .describe("Exact index name. No wildcard, no comma-separated list."),
+      title: "Delete documents by query",
+      description: "Delete every document a query matches. Irreversible and unbounded: run count with the same query first to see how many would go.",
+      inputSchema: {
+        index: z
+          .string()
+          .trim()
+          .min(1, "Index name is required")
+          .describe("Exact index name. No wildcard, no comma-separated list."),
 
-      query: z
-        .record(z.string(), z.any())
-        .describe("Query DSL selecting what to delete. Required: there is no implicit delete-all."),
+        query: z
+          .record(z.string(), z.any())
+          .describe("Query DSL selecting what to delete. Required: there is no implicit delete-all."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ index, query }) => {
-      return await deleteByQuery(esClient, index, query);
+    async ({ index, query }, extra) => {
+      return await deleteByQuery(es(extra), index, query);
     }
   );
 }

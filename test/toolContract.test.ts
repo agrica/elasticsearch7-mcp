@@ -34,9 +34,11 @@ import { listIndices } from "../src/tools/listIndices.js";
 import { reindex } from "../src/tools/reindex.js";
 import { search } from "../src/tools/search.js";
 import {
+  capture,
   createMockedClient,
   failEveryRoute,
   hasErrorFragment,
+  isFailure,
   type ToolResult,
 } from "./support/mockClient.js";
 
@@ -94,6 +96,9 @@ describe("tool contract, with every cluster call failing", () => {
       expect(typeof fragment.text).toBe("string");
     }
     expect(hasErrorFragment(result)).toBe(true);
+    // The protocol's own failure signal. Without it a client has to match on
+    // the text, which is a convention and not a contract.
+    expect(result.isError, `${_name} must set isError on failure`).toBe(true);
   });
 
   it("cluster_info reports the failure instead of throwing", async () => {
@@ -108,6 +113,28 @@ describe("tool contract, with every cluster call failing", () => {
 
     const result = await getClusterInfo(client);
 
-    expect(hasErrorFragment(result)).toBe(true);
+    expect(isFailure(result)).toBe(true);
+  });
+
+  it("leaves isError unset when the call succeeds", async () => {
+    // Omitted rather than false: the protocol defaults it, and a success that
+    // carries the field invites a client to read it as meaningful.
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_cat/indices/*" }, []);
+
+    const result = await listIndices(client);
+
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("marks a guardrail refusal as a failure, not a quiet success", async () => {
+    // The refusal path sends nothing to the cluster, so nothing throws. A model
+    // reading a success here would conclude the index had been deleted.
+    const { client } = createMockedClient();
+
+    const result = await deleteIndex(client, "logs-*");
+
+    expect(isFailure(result)).toBe(true);
+    expect(result.content[0]?.text).toContain("Refusing");
   });
 });

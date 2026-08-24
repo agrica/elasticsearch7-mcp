@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 139 tests, mocked at the client connection layer
+pnpm test             # vitest run — 155 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -118,6 +118,20 @@ Errors are caught, logged with `console.error`, and returned as a `text` fragmen
 
 Results are formatted as human/LLM-readable text (multiple fragments: a summary fragment first, then details), not as raw JSON blobs — except where the payload is genuinely structured (`listIndices`, `getMappings` stringify it).
 
+### MCP conformance: what the specification requires and what this server does
+
+Audited against the 2025-06-18 specification. Four points are load-bearing, and one is a deliberate deviation.
+
+- **`isError: true` on every failure.** The specification separates protocol errors (JSON-RPC) from *tool execution* errors, which are results carrying `isError`. `toolError()` and `toolRefusal()` both set it; success omits it, since the protocol defaults it to false. A guardrail refusal counts as a failure — reporting it as a success would let a model conclude a delete had happened. `test/toolContract.test.ts` asserts the flag for all 26 tools; removing it from `toolResult.ts` fails 27 tests.
+- **Every tool carries `annotations` and a `title`, via `registerTool`.** `server.tool()` is deprecated in SDK 1.30 and cannot pass either. The hints are what a client reads to decide whether to ask the user first, so they are the client-side counterpart of the registration gating — not a replacement for it, since the specification tells clients to distrust annotations from an untrusted server. `idempotentHint` is claimed only where repeating the identical call really leaves the same state: `create_index` fails when the index exists, `delete_index` 404s once it is gone, and `bulk` without an id field creates new documents each time — all four are annotated `false`, and a test enforces that.
+- **Cancellation is bound to the client, not threaded through the tools.** See `src/cancellable.ts`. `withCancellation(esClient, extra.signal)` returns a Proxy whose requests abort when the client cancels; the register modules are the only place that applies it. The alternative — a trailing `signal` parameter on all 26 tool functions — would have changed every public signature that `src/server.ts` re-exports, to say one thing about the client rather than about the arguments.
+- **`src/processSafetyNet.ts` tolerates exactly one stray error.** Aborting a request makes the 7.x client emit a second `RequestAbortedError` outside any promise chain, from the `product-check` EventEmitter callback in `Transport.js`; unowned, it would end the process and take the whole stdio session with it. Only that error *name* passes; anything else is logged and exits non-zero. Do not widen this into a general handler.
+
+Two things the specification asks for that this server does not do:
+
+- **No rate limiting.** The specification says servers *MUST* rate limit tool invocations. This is a **knowing deviation**, not an oversight. The server is spawned by, and serves, exactly one local MCP client over stdio: the client is the trust boundary, and a limiter there would throttle the operator rather than an attacker. The real hazard it would address — a `delete_by_query` or a wide `search` issued in a loop against a production cluster — is addressed instead by the registration gating (deletes are absent unless enabled), by `rejectBulkTarget()` (no wildcard target), and by the cluster's own limits. Revisit this if the server ever gains a non-stdio transport, where the caller stops being the operator.
+- **`listChanged: true` is declared but never emitted.** `McpServer` hardcodes it in `registerCapabilities`, so it cannot be turned off through the public API. Harmless here: the tool list is fixed at startup by the environment flags, so there is never a change to notify about.
+
 ### The 7.x client API shape
 
 Two rules that differ from the 8.x client and that every tool follows:
@@ -186,6 +200,8 @@ Keep the zod parameter order and the tool function's positional parameter order 
 ### Configuration
 
 `ES_HOST` (comma-separated for multiple nodes → `nodes[]` for failover/load balancing), `ES_API_KEY`, `ES_USERNAME`/`ES_PASSWORD`, `ES_CA_CERT` (→ `ssl.ca`; the 7.x client calls this option `ssl`, not `tls`). Each has an un-prefixed legacy fallback (`HOST`, `API_KEY`, `USERNAME`, …) kept for backward compatibility. Auth precedence: API key wins; basic auth applies only when *both* username and password are non-empty.
+
+`ES_INSTANCE_LABEL` is free text and purely cosmetic — it becomes `serverInfo.title` (`Elasticsearch 7.x — production`) and is echoed to stderr at startup. It exists because a real `mcpServers` block usually declares this server once per cluster, and without it a client shows two identically named servers. It has no effect on behaviour: do not make anything depend on it, in particular not the destructive gate, which is `ES_ALLOW_DESTRUCTIVE` and nothing else.
 
 `ES_ADMIN_TOOLS` and `ES_ALLOW_DESTRUCTIVE` accept `true` or `1` (case-insensitive, trimmed); anything else, unset included, is off. They deliberately have **no un-prefixed fallback** — an ambient `ADMIN_TOOLS` deciding whether deletes are reachable is exactly the `USERNAME` hazard below, with worse consequences.
 

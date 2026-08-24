@@ -42,6 +42,14 @@ export const ConfigSchema = z
       .boolean()
       .default(false)
       .describe("Expose the tools that delete indices, documents or templates"),
+
+    instanceLabel: z
+      .string()
+      .trim()
+      .default("")
+      .describe(
+        "Free-text name of the deployment, e.g. production or staging. Surfaced as the server title so a client listing several instances can tell them apart."
+      ),
   });
 
 /**
@@ -114,5 +122,6 @@ export function loadConfigFromEnv(): ElasticsearchConfig {
     caCert: process.env.ES_CA_CERT || process.env.CA_CERT || "",
     adminTools: readFlag(process.env.ES_ADMIN_TOOLS),
     allowDestructive: readFlag(process.env.ES_ALLOW_DESTRUCTIVE),
+    instanceLabel: process.env.ES_INSTANCE_LABEL ?? "",
   };
 } 

@@ -60,6 +60,9 @@ ENV ES_API_KEY=""
 ENV ES_USERNAME=""
 ENV ES_PASSWORD=""
 ENV ES_CA_CERT=""
+# Shown as the server title. Worth setting when a client declares more than one
+# instance, so production and staging are not two identically named servers.
+ENV ES_INSTANCE_LABEL=""
 # Both tool gates default to off: an image pulled and run with no further
 # thought exposes read-and-search tools only.
 ENV ES_ADMIN_TOOLS="false"

@@ -110,8 +110,9 @@ for a single index gets a refusal instead of an emptied cluster.
 ### Connect it to your client
 
 Every example below sets `ES_HOST` and `ES_API_KEY`. Swap in
-`ES_USERNAME`/`ES_PASSWORD` for basic auth, and add `ES_ADMIN_TOOLS=true` to get
-the diagnostic tools — see [Configuration Options](#configuration-options).
+`ES_USERNAME`/`ES_PASSWORD` for basic auth, add `ES_ADMIN_TOOLS=true` to get
+the diagnostic tools, and set `ES_INSTANCE_LABEL` when more than one instance is
+declared — see [Configuration Options](#configuration-options).
 
 <details open>
 <summary><strong>Claude Code</strong> — <code>claude mcp add</code></summary>
@@ -222,6 +223,7 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 | `ES_USERNAME` | Elasticsearch username for basic authentication (also supports legacy `USERNAME`) | No |
 | `ES_PASSWORD` | Elasticsearch password for basic authentication (also supports legacy `PASSWORD`) | No |
 | `ES_CA_CERT` | Path to custom CA certificate for Elasticsearch SSL/TLS (also supports legacy `CA_CERT`) | No |
+| `ES_INSTANCE_LABEL` | Free-text name of this deployment, e.g. `production`. Shown as the server title, so several instances declared side by side are distinguishable. | No |
 | `ES_ADMIN_TOOLS` | `true` to also expose the read-only diagnostic tools. Default off. | No |
 | `ES_ALLOW_DESTRUCTIVE` | `true` to also expose the irreversible tools. Default off. | No |
 
@@ -232,6 +234,50 @@ The Elasticsearch MCP Server supports configuration options to connect to your E
 > something that decides whether deletes are reachable.
 >
 > Both accept `true` or `1`; anything else, including an unset variable, means off.
+
+### Labelling several instances
+
+Most setups declare this server more than once — one entry per cluster. The
+entries are otherwise identical, so a client shows two servers with the same
+name and nothing to tell them apart. `ES_INSTANCE_LABEL` becomes the server's
+display title, and it is the natural place to say which environment an entry
+reaches:
+
+```json
+{
+  "mcpServers": {
+    "es7-prod": {
+      "command": "npx",
+      "args": ["-y", "@agrica/elasticsearch7-mcp"],
+      "env": {
+        "ES_HOST": "https://es-prod:9200",
+        "ES_API_KEY": "prod-key",
+        "ES_INSTANCE_LABEL": "production",
+        "ES_ADMIN_TOOLS": "true"
+      }
+    },
+    "es7-staging": {
+      "command": "npx",
+      "args": ["-y", "@agrica/elasticsearch7-mcp"],
+      "env": {
+        "ES_HOST": "https://es-staging:9200",
+        "ES_API_KEY": "staging-key",
+        "ES_INSTANCE_LABEL": "staging",
+        "ES_ADMIN_TOOLS": "true",
+        "ES_ALLOW_DESTRUCTIVE": "true"
+      }
+    }
+  }
+}
+```
+
+That pair is the intended shape: **diagnostics on both, deletes only on
+staging.** Production keeps the tools that explain an unhealthy index and never
+exposes one that can remove data — the model cannot call what was never
+registered.
+
+The label is also printed to stderr at startup, which is where to look when a
+client reports a connection but you cannot tell which cluster answered.
 
 ### Multiple URLs Configuration
 

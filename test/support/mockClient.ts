@@ -56,6 +56,7 @@ export const INFO_7_8_0 = {
 /** What every tool function resolves to: the MCP content shape. */
 export type ToolResult = {
   content: { type: "text"; text: string }[];
+  isError?: boolean;
 };
 
 /** Request as the mock hands it to a resolver, after deserialization. */
@@ -111,6 +112,18 @@ export function textOf(result: ToolResult): string {
 /** Tools never throw: they report failure as an `Error:` fragment. */
 export function hasErrorFragment(result: ToolResult): boolean {
   return result.content.some((fragment) => fragment.text.startsWith("Error:"));
+}
+
+/**
+ * A failed call as the protocol defines one: `isError` set, and readable text
+ * saying why.
+ *
+ * The flag is the part that matters. The `Error:` prefix is a convention this
+ * server happens to follow; `isError` is what every client reads, and checking
+ * only the text would let the flag be dropped without a single test noticing.
+ */
+export function isFailure(result: ToolResult): boolean {
+  return result.isError === true && hasErrorFragment(result);
 }
 
 /**

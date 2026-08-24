@@ -22,9 +22,9 @@
  * directly regardless: what it verifies is that the API calls work on a 7.x
  * server, which is independent of what a given deployment chooses to expose.
  *
- * Tool functions never throw: they return their failure as a text fragment
- * prefixed `Error:`. Detection therefore scans the returned fragments,
- * and the process exits non-zero if any check failed.
+ * Tool functions never throw: a failure comes back as a result carrying
+ * `isError: true`. Detection reads that flag, and the process exits non-zero if
+ * any check failed.
  */
 
 import { Client } from "@elastic/elasticsearch";
@@ -79,11 +79,27 @@ function render(result) {
     .trim();
 }
 
+/**
+ * `isError` is the protocol's own failure signal and the primary check. The
+ * `Error:` prefix is kept as a secondary one: it catches a tool that formats a
+ * failure as text but forgets the flag, which is exactly the defect the flag was
+ * added to remove.
+ */
 function failed(result) {
-  return (result?.content ?? []).some(
+  if (result?.isError === true) return true;
+
+  const textLooksLikeFailure = (result?.content ?? []).some(
     (fragment) =>
       typeof fragment.text === "string" && fragment.text.startsWith("Error:")
   );
+
+  if (textLooksLikeFailure) {
+    console.error(
+      "  (ce résultat porte un texte d'erreur sans isError — le drapeau manque)"
+    );
+    return true;
+  }
+  return false;
 }
 
 function truncate(text, max = 400) {

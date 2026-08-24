@@ -98,4 +98,28 @@ if (undescribed.length > 0) {
   fail(`tools without a description or input schema: ${undescribed.join(", ")}`);
 }
 
+// Annotations are how a client decides whether to ask the user before running a
+// tool. Missing ones are not a protocol error, so nothing else would notice.
+const unannotated = (listed.result?.tools ?? [])
+  .filter((tool) => !tool.annotations || !tool.title)
+  .map((tool) => tool.name);
+if (unannotated.length > 0) {
+  fail(`tools without annotations or a title: ${unannotated.join(", ")}`);
+}
+
+// The default image must expose nothing that deletes. Checking the annotation
+// as well as the name catches a tool that was gated correctly but mis-annotated,
+// and one that slipped into the default set carrying the right hint.
+const destructive = (listed.result?.tools ?? [])
+  .filter((tool) => tool.annotations?.destructiveHint === true)
+  .map((tool) => tool.name);
+if (destructive.length > 0) {
+  fail(`the default tool set must hold nothing destructive, found: ${destructive.join(", ")}`);
+}
+
+const readOnly = (listed.result?.tools ?? []).filter(
+  (tool) => tool.annotations?.readOnlyHint === true
+).length;
+console.log(`annotations: ${readOnly} read-only, 0 destructive`);
+
 console.log(`OK: ${names.length} tools exposed — ${names.join(", ")}`);
