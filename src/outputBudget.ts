@@ -29,6 +29,44 @@ export function setResultBudget(maxBytes: number): void {
   configuredMaxBytes = maxBytes;
 }
 
+/**
+ * How many records fit a given number of bytes.
+ *
+ * The room is passed in rather than derived from a share of the budget, and that
+ * is the whole design of structured output here: the text is assembled first and
+ * the structured payload gets what is left. Charging the structured half up
+ * front was the first attempt, and measuring it settled the question — a
+ * `list_indices` call over 365 indices went from listing all of them in 21 917
+ * bytes of text to listing about half, because the same five facts per index
+ * cost roughly twice as much as JSON as they do as a line. Adding a
+ * machine-readable copy must not make the answer a model reads worse.
+ *
+ * Returned rather than applied, because only the tool knows what to call the
+ * remainder: `list_shards` reports it as shards, and the count belongs in the
+ * payload as `returned` against `total`, where a caller compares two numbers
+ * instead of parsing prose.
+ */
+export function fitRecords<T>(
+  records: T[],
+  room: number
+): { included: T[]; omitted: number } {
+  // The payload around the records — the counts, the pattern, the index name —
+  // costs bytes too, and it is small and predictable.
+  const allowance = room - 128;
+
+  let used = 0;
+  let count = 0;
+  for (const record of records) {
+    // Compact JSON, since that is how a structured payload travels; the
+    // separator is the one byte per record the array itself costs.
+    used += bytes(JSON.stringify(record)) + 1;
+    if (used > allowance) break;
+    count += 1;
+  }
+
+  return { included: records.slice(0, count), omitted: records.length - count };
+}
+
 export type BudgetedParts = {
   /**
    * Kept whatever the budget: the counts, the unhealthy shards, the answer. If
@@ -46,6 +84,17 @@ export type BudgetedParts = {
    * cannot act on it.
    */
   hint?: string;
+
+  /**
+   * The machine-readable answer, built from whatever the text left over.
+   *
+   * A callback rather than a value because the room is only known once the
+   * fragments are assembled, and because that ordering is the point: the text
+   * is what the calling model reads, so adding a structured copy may not shrink
+   * it. Returning `undefined` means there was not enough room — legitimate only
+   * where the tool's output schema makes the payload optional.
+   */
+  structured?: (room: number) => Record<string, unknown> | undefined;
 
   /** Overrides the configured budget. Tests use it; tools should not. */
   maxBytes?: number;
@@ -164,5 +213,8 @@ export function budgeted(parts: BudgetedParts): ToolResult {
     );
   }
 
-  return { content };
+  if (!parts.structured) return { content };
+
+  const structuredContent = parts.structured(Math.max(0, maxBytes - used));
+  return structuredContent ? { content, structuredContent } : { content };
 }

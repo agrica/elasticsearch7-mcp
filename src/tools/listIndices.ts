@@ -1,6 +1,6 @@
 import { Client, estypes } from "@elastic/elasticsearch";
 import { textFragment, toolError, type ToolResult } from "../toolResult.js";
-import { budgeted, chunkedJson } from "../outputBudget.js";
+import { budgeted, chunkedJson, fitRecords } from "../outputBudget.js";
 
 /**
  * List Elasticsearch indices, optionally filtered.
@@ -65,6 +65,19 @@ export async function listIndices(
       // having when a caller wants to parse it, first to go when space runs out.
       detail: verbose ? chunkedJson(indicesInfo) : [],
       hint: "Narrow `pattern` (e.g. `logs-2026.08.*`) to see fewer indices.",
+      // The same rows, machine-readable, in whatever room the text left. It
+      // reports how far it got as `returned` against `total`, so a caller does
+      // not have to trust prose about a trim.
+      structured: (room) => {
+        const { included, omitted } = fitRecords(indicesInfo, room);
+        return {
+          pattern: pattern || "*",
+          total: indicesInfo.length,
+          returned: included.length,
+          omitted,
+          indices: included,
+        };
+      },
     });
   } catch (error) {
     return toolError("Failed to list indices", error);

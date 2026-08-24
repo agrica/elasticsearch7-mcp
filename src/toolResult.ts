@@ -13,8 +13,19 @@ export type TextFragment = { type: "text"; text: string };
  * the only machine-readable signal a client has: without it, telling a failure
  * from a success means string-matching the text, which is not a contract.
  * Omitted on success — the protocol defaults it to false.
+ *
+ * `structuredContent` is the machine-readable answer, present only on the four
+ * tools whose result is genuinely tabular. It is not optional decoration there:
+ * the SDK rejects a successful result that omits it when the tool declared an
+ * `outputSchema`, so the two go together or neither does. It also counts
+ * against the byte budget, because it reaches the caller's context exactly like
+ * the text does — see src/outputBudget.ts.
  */
-export type ToolResult = { content: TextFragment[]; isError?: boolean };
+export type ToolResult = {
+  content: TextFragment[];
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+};
 
 type Assert<T extends true> = T;
 export type ToolResultMatchesProtocol = Assert<

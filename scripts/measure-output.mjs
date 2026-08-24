@@ -14,6 +14,14 @@
  * No cluster is contacted: the Elasticsearch client is mocked at its connection
  * layer, and the fixtures are a year of daily indices — 365 indices, 2190
  * shards, 500 log hits.
+ *
+ * The same shapes are defined in `test/support/scaleFixtures.ts`, which holds
+ * the ceilings as a test. They are two definitions of one thing and must be
+ * kept in step: this script is plain JS and deliberately outside the build, so
+ * it cannot import the typed fixtures, and the alternative — dropping `strict`
+ * typing on the fixtures so both could share one file — would weaken the test
+ * to tidy the script. The counts each side asserts (365 / 2190 / 500) are what
+ * make a drift visible.
  */
 
 import { Client } from "@elastic/elasticsearch";
@@ -26,6 +34,7 @@ import { listIndices } from "../dist/src/tools/listIndices.js";
 import { listNodes, listShards } from "../dist/src/tools/diagnostics.js";
 import { search } from "../dist/src/tools/search.js";
 import { getClusterHealth } from "../dist/src/tools/getClusterHealth.js";
+import { getMappings } from "../dist/src/tools/getMappings.js";
 
 const INFO = {
   name: "es-node-1",
@@ -51,19 +60,35 @@ function mockedClient(routes) {
   });
 }
 
-const bytes = (result) =>
+const textBytes = (result) =>
   Buffer.byteLength((result?.content ?? []).map((f) => f.text).join("\n"), "utf8");
+
+const structuredBytes = (result) =>
+  result?.structuredContent
+    ? Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8")
+    : 0;
+
+// Both halves reach the caller's context, so both are measured. Reporting only
+// the fragments would show a result as half its size the moment a tool gained an
+// output schema.
+const bytes = (result) => textBytes(result) + structuredBytes(result);
 
 // Bytes / 4 is a rule of thumb, not a tokeniser. Stated here so the number in
 // the report is not mistaken for a measurement it is not.
 const tokens = (n) => Math.round(n / 4);
 
-function row(label, size) {
+function row(label, size, structured = 0) {
+  const split = structured > 0 ? `  (${structured} B structured)` : "";
   console.log(
     `  ${label.padEnd(42)} ${String(size).padStart(7)} B   ~${String(
       tokens(size)
-    ).padStart(6)} tokens`
+    ).padStart(6)} tokens${split}`
   );
+}
+
+/** Measure a tool result, reporting the structured share where there is one. */
+function measure(label, result) {
+  row(label, bytes(result), structuredBytes(result));
 }
 
 // ---------------------------------------------------------------- fixtures
@@ -111,6 +136,13 @@ const hits = Array.from({ length: 500 }, (_, i) => ({
   },
 }));
 
+const mapping1000 = Object.fromEntries(
+  Array.from({ length: 1000 }, (_, i) => [
+    `field_${i}`,
+    { type: i % 3 === 0 ? "text" : "keyword" },
+  ])
+);
+
 const nodes = Array.from({ length: 24 }, (_, i) => ({
   name: `es-node-${i + 1}`,
   "node.role": "dilm",
@@ -129,26 +161,35 @@ console.log(
   `\nTool output — 365 daily indices, ${shards.length} shards, 500 log hits\n`
 );
 
-row(
+measure(
   "list_indices",
-  bytes(await listIndices(mockedClient([["/_cat/indices/*", indices]])))
+  await listIndices(mockedClient([["/_cat/indices/*", indices]]))
 );
-row(
+measure(
   "list_indices (verbose)",
-  bytes(
-    await listIndices(mockedClient([["/_cat/indices/*", indices]]), undefined, true)
+  await listIndices(mockedClient([["/_cat/indices/*", indices]]), undefined, true)
+);
+measure("list_shards", await listShards(mockedClient([["/_cat/shards", shards]])));
+measure(
+  "list_shards (verbose)",
+  await listShards(mockedClient([["/_cat/shards", shards]]), undefined, true)
+);
+measure("list_nodes", await listNodes(mockedClient([["/_cat/nodes", nodes]])));
+
+// A thousand-field mapping, which is what a logging index looks like. This tool
+// was outside the measured set until it gained an output schema, and it used to
+// return the whole mapping pretty-printed with no budget at all.
+measure(
+  "get_mappings, 1000 fields",
+  await getMappings(
+    mockedClient([["/logs/_mapping", { logs: { mappings: { properties: mapping1000 } } }]]),
+    "logs"
   )
 );
-row("list_shards", bytes(await listShards(mockedClient([["/_cat/shards", shards]]))));
-row(
-  "list_shards (verbose)",
-  bytes(await listShards(mockedClient([["/_cat/shards", shards]]), undefined, true))
-);
-row("list_nodes", bytes(await listNodes(mockedClient([["/_cat/nodes", nodes]]))));
 
-row(
+measure(
   "search, size: 500 requested",
-  bytes(
+  (
     await search(
       mockedClient([
         ["/logs/_mapping", { logs: { mappings: { properties: { message: { type: "text" } } } } }],
@@ -163,9 +204,9 @@ row(
   )
 );
 
-row(
+measure(
   "elasticsearch_health, index detail",
-  bytes(
+  (
     await getClusterHealth(
       mockedClient([
         [

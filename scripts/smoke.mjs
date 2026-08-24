@@ -145,22 +145,23 @@ function skip(label, reason) {
   console.log(`\n── ${label}\n  SKIP — ${reason}`);
 }
 
-/** Pick a non-system index out of the list_indices JSON fragment. */
+/**
+ * Pick a non-system index out of the list_indices result.
+ *
+ * This used to parse the text fragments looking for a JSON array, which stopped
+ * working the moment `list_indices` put its JSON behind `verbose`: every
+ * index-dependent check below then reported SKIP for want of a sample index, and
+ * a smoke run that skips half its checks still exits zero. The structured
+ * payload is the contract to read here — it is machine-readable by declaration,
+ * not by accident of formatting.
+ */
 function firstUserIndex(result) {
-  for (const fragment of result?.content ?? []) {
-    let parsed;
-    try {
-      parsed = JSON.parse(fragment.text);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(parsed)) continue;
-    const found = parsed.find(
-      (entry) => typeof entry.index === "string" && !entry.index.startsWith(".")
-    );
-    if (found) return found.index;
-  }
-  return null;
+  const indices = result?.structuredContent?.indices;
+  if (!Array.isArray(indices)) return null;
+  const found = indices.find(
+    (entry) => typeof entry.index === "string" && !entry.index.startsWith(".")
+  );
+  return found ? found.index : null;
 }
 
 const config = loadConfigFromEnv();

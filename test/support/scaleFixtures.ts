@@ -77,7 +77,25 @@ export function nodesFor(count = 24) {
   }));
 }
 
-/** Bytes a tool result would put into the caller's context. */
-export function resultBytes(result: { content: { text: string }[] }): number {
+/**
+ * Bytes a tool result would put into the caller's context.
+ *
+ * Both halves count. `structuredContent` travels with the result and reaches the
+ * model exactly as the text does, so measuring only the fragments would report a
+ * result as half its size the moment a tool gained an output schema — which is
+ * precisely the regression the budget exists to prevent.
+ */
+export function resultBytes(result: {
+  content: { text: string }[];
+  structuredContent?: Record<string, unknown>;
+}): number {
+  const structured = result.structuredContent
+    ? Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8")
+    : 0;
+  return textBytes(result) + structured;
+}
+
+/** Bytes of the text fragments alone, when a test is about what a human reads. */
+export function textBytes(result: { content: { text: string }[] }): number {
   return Buffer.byteLength(result.content.map((f) => f.text).join("\n"), "utf8");
 }

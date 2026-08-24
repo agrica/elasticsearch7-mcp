@@ -107,6 +107,20 @@ if (unannotated.length > 0) {
   fail(`tools without annotations or a title: ${unannotated.join(", ")}`);
 }
 
+// The tabular tools declare an output schema, and the SDK then rejects any
+// successful result of theirs that carries no structured payload — so this
+// assertion is also what proves the pair was not half-removed.
+const STRUCTURED_TOOLS = ["get_mappings", "list_indices"];
+const unstructured = STRUCTURED_TOOLS.filter(
+  (name) =>
+    !(listed.result?.tools ?? []).some(
+      (tool) => tool.name === name && tool.outputSchema
+    )
+);
+if (unstructured.length > 0) {
+  fail(`tools that should declare an output schema do not: ${unstructured.join(", ")}`);
+}
+
 // The default image must expose nothing that deletes. Checking the annotation
 // as well as the name catches a tool that was gated correctly but mis-annotated,
 // and one that slipped into the default set carrying the right hint.

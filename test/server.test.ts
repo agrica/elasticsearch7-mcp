@@ -100,6 +100,32 @@ describe("MCP server registration", () => {
     await client.close();
   });
 
+  it("declares an output schema on the tabular tools and nowhere else", async () => {
+    // Four, not twenty-six: an output schema is paid for in every session's
+    // `tools/list`, and earns it only where a caller would otherwise parse
+    // prose. This is also the guard for the pairing — the SDK rejects a
+    // successful result that has a schema but no structured payload, so a
+    // schema added here without one in the tool is a runtime protocol error.
+    const { client } = await connectedClient({ adminTools: true });
+
+    const { tools } = await client.listTools();
+    const structured = tools
+      .filter((tool) => tool.outputSchema)
+      .map((tool) => tool.name)
+      .sort();
+
+    expect(structured).toEqual([
+      "get_index_settings",
+      "get_mappings",
+      "list_indices",
+      "list_shards",
+    ]);
+    for (const tool of tools.filter((tool) => tool.outputSchema)) {
+      expect(tool.outputSchema?.type).toBe("object");
+    }
+    await client.close();
+  });
+
   it("describes every field of the search tool's schema", async () => {
     const { client } = await connectedClient();
 

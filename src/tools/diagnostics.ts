@@ -1,6 +1,6 @@
 import { Client, estypes } from "@elastic/elasticsearch";
 import { textFragment, toolError, type ToolResult } from "../toolResult.js";
-import { budgeted, chunkedJson } from "../outputBudget.js";
+import { budgeted, chunkedJson, fitRecords } from "../outputBudget.js";
 
 /**
  * Why a shard is unassigned — the question a red or yellow index actually poses.
@@ -119,6 +119,16 @@ export async function listShards(
       );
     }
 
+    // The structured payload carries the same answer as the text, typed: the
+    // not-started shards by default, every shard when the caller asked for
+    // every shard. Letting it fill the budget with 2190 STARTED rows that
+    // nobody asked for is how a 26-byte summary became a 32 KB result in the
+    // first measurement of this change — the default has to stay a summary in
+    // both channels, not just the readable one.
+    const ordered = verbose
+      ? [...unhealthy, ...shards.filter((shard) => shard.state === "STARTED")]
+      : unhealthy;
+
     // The full dump used to be unconditional, and it is what let one call on a
     // 2190-shard cluster return 385 KB. The summary above is what a diagnosis
     // needs; the dump is now asked for.
@@ -128,6 +138,17 @@ export async function listShards(
       hint: index
         ? "Set verbose only when the per-shard fields are needed."
         : "Pass an index to look at one index's shards.",
+      structured: (room) => {
+        const { included, omitted } = fitRecords(ordered, room);
+        return {
+          ...(index ? { index } : {}),
+          total: shards.length,
+          notStarted: unhealthy.length,
+          returned: included.length,
+          omitted,
+          shards: included,
+        };
+      },
     });
   } catch (error) {
     return toolError("List shards failed", error);

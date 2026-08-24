@@ -14,20 +14,50 @@ describe("getMappings", () => {
   it("unwraps the mapping through `.body[index].mappings`", async () => {
     const { client, mock } = createMockedClient();
     capture(mock, { method: "GET", path: "/logs/_mapping" }, {
-      logs: { mappings: { properties: { message: { type: "text" } } } },
+      logs: {
+        mappings: {
+          properties: {
+            message: { type: "text" },
+            kubernetes: { properties: { pod: { properties: { name: { type: "text" } } } } },
+          },
+        },
+      },
     });
 
-    const text = textOf(await getMappings(client, "logs"));
+    const result = await getMappings(client, "logs");
+    const text = textOf(result);
 
-    expect(text).toContain("Index mapping: logs");
-    expect(text).toContain('"message"');
+    // The field listing is the answer, and a nested field is named by the
+    // dotted path a query would use.
+    expect(text).toContain("2 fields");
+    expect(text).toContain("message: text");
+    expect(text).toContain("kubernetes.pod.name: text");
+    // The raw mapping still follows, for whoever wants the analyzers.
     expect(text).toContain('"type": "text"');
+    expect(result.structuredContent).toMatchObject({
+      index: "logs",
+      found: true,
+      total: 2,
+      omitted: 0,
+      fields: [
+        { path: "message", type: "text" },
+        { path: "kubernetes.pod.name", type: "text" },
+      ],
+    });
   });
 
-  it("falls back to an empty object when the index key is absent", async () => {
+  it("says the index was not in the response rather than showing an empty mapping", async () => {
+    // A wildcard or an alias comes back keyed by the concrete indices it
+    // resolved to, so `body[index]` is absent — which used to render as
+    // `mapping: {}`, indistinguishable from an index that genuinely has no
+    // fields.
     const { client, mock } = createMockedClient();
     capture(mock, { method: "GET", path: "/logs/_mapping" }, {});
-    expect(textOf(await getMappings(client, "logs"))).toContain("mapping: {}");
+
+    const result = await getMappings(client, "logs");
+
+    expect(textOf(result)).toContain("No mapping returned");
+    expect(result.structuredContent).toMatchObject({ found: false, total: 0 });
   });
 
   it("reports a cluster failure as an Error fragment", async () => {

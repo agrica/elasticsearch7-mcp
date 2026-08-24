@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Client } from "@elastic/elasticsearch";
 import { withCancellation } from "../cancellable.js";
+import { indexName } from "./schemas.js";
+import { GET_INDEX_SETTINGS_OUTPUT, LIST_SHARDS_OUTPUT } from "./outputSchemas.js";
 import {
   explainAllocation,
   getIndexStats,
@@ -75,8 +77,9 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
         verbose: z
           .boolean()
           .optional()
-          .describe("Also return every shard as JSON. On a large cluster this is thousands of entries — pass an index with it."),
+          .describe("Also repeat every shard as JSON text, for a client that does not read structured output. On a large cluster this is thousands of entries — pass an index with it."),
       },
+      outputSchema: LIST_SHARDS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, verbose }, extra) => {
@@ -91,11 +94,7 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       title: "Index statistics",
       description: "Per-index counters: size, documents, segments, and indexing, search, merge and refresh activity. This is where a slow index shows itself.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Concrete index name"),
+        index: indexName("Concrete index name"),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
@@ -125,12 +124,9 @@ export function registerAdminTools(server: McpServer, esClient: Client): void {
       title: "Get index settings",
       description: "An index's settings. refresh_interval, number_of_replicas and read-only blocks explain most complaints about speed or refused writes.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Concrete index name"),
+        index: indexName("Concrete index name"),
       },
+      outputSchema: GET_INDEX_SETTINGS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => {

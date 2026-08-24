@@ -3,6 +3,7 @@ import { DEFAULT_MAX_RESULT_BYTES } from "../src/outputBudget.js";
 import { listIndices } from "../src/tools/listIndices.js";
 import { listNodes, listShards } from "../src/tools/diagnostics.js";
 import { search } from "../src/tools/search.js";
+import { getMappings } from "../src/tools/getMappings.js";
 import { capture, createMockedClient, textOf } from "./support/mockClient.js";
 import {
   dailyIndices,
@@ -10,6 +11,7 @@ import {
   nodesFor,
   resultBytes,
   shardsFor,
+  textBytes,
 } from "./support/scaleFixtures.js";
 
 /**
@@ -77,7 +79,10 @@ describe("output at cluster scale", () => {
     const result = await listShards(client, undefined, true);
     const text = textOf(result);
 
-    expect(resultBytes(result)).toBeGreaterThan(10_000);
+    // Measured on the text alone, which is what a `verbose` caller asked for:
+    // the structured payload gets what the text left, never the other way
+    // round, so adding an output schema cannot shrink this.
+    expect(textBytes(result)).toBeGreaterThan(10_000);
     expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
     // Each chunk says which slice of the whole it is, so a caller can tell how
     // far the listing got.
@@ -100,6 +105,82 @@ describe("output at cluster scale", () => {
 
     expect(text).toContain("clamped to 100");
     expect(text).toContain("from=100");
+    expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+  });
+
+  it("does not shrink the text answer to make room for the structured one", async () => {
+    // The first version of the structured payload took half the budget up
+    // front, and the text answer went from listing all 365 indices to listing
+    // about half — the same five facts cost roughly twice as much as JSON as
+    // they do as a line. The text is what the calling model reads, so it is
+    // assembled first and the structured copy gets the remainder.
+    const { client, mock } = createMockedClient();
+    const indices = dailyIndices();
+    capture(mock, { method: "GET", path: "/_cat/indices/*" }, indices);
+
+    const result = await listIndices(client);
+    const text = textOf(result);
+
+    expect(text).not.toContain("Result budget");
+    for (const index of [indices[0], indices[indices.length - 1]]) {
+      expect(text).toContain(index?.index);
+    }
+    expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+  });
+
+  it("keeps the structured payload as terse as the text it accompanies", async () => {
+    // `list_shards` without verbose answers in 26 bytes. Letting the structured
+    // payload fill the remaining budget with 2190 STARTED rows nobody asked for
+    // turned that into 32 KB — measured, on the first version of this change.
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_cat/shards" }, shardsFor(dailyIndices()));
+
+    const result = await listShards(client);
+
+    expect(resultBytes(result)).toBeLessThan(1_000);
+    expect(result.structuredContent).toMatchObject({ total: 2190, returned: 0 });
+  });
+
+  it("charges the structured payload against the same budget as the text", async () => {
+    // Adding `structuredContent` is how a byte budget gets quietly halved: the
+    // fragments look the same size while the result carries a second copy of
+    // the answer. Both halves are measured, and their sum is what must hold.
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_cat/shards" }, shardsFor(dailyIndices()));
+
+    const result = await listShards(client, undefined, true);
+    const structured = result.structuredContent as {
+      total: number;
+      returned: number;
+      omitted: number;
+      shards: unknown[];
+    };
+
+    expect(structured.total).toBe(2190);
+    expect(structured.shards.length).toBe(structured.returned);
+    // Trimmed, and saying so in a number rather than only in prose.
+    expect(structured.returned).toBeLessThan(structured.total);
+    expect(structured.omitted).toBe(structured.total - structured.returned);
+    expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
+  });
+
+  it("keeps get_mappings bounded on a mapping with a thousand fields", async () => {
+    // This tool was never in the measured set, and it returned the whole
+    // mapping pretty-printed with no budget at all.
+    const { client, mock } = createMockedClient();
+    const properties = Object.fromEntries(
+      Array.from({ length: 1000 }, (_, i) => [
+        `field_${i}`,
+        { type: i % 3 === 0 ? "text" : "keyword" },
+      ])
+    );
+    capture(mock, { method: "GET", path: "/logs/_mapping" }, {
+      logs: { mappings: { properties } },
+    });
+
+    const result = await getMappings(client, "logs");
+
+    expect(textOf(result)).toContain("1000 fields");
     expect(resultBytes(result)).toBeLessThanOrEqual(CEILING + 300);
   });
 

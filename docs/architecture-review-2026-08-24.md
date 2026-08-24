@@ -3,11 +3,31 @@
 24 August 2026, against commit `e494a32`. Every number below was measured, not
 estimated; the method is given with each one so it can be re-run.
 
-> **Status.** Phases 1 and 2 are implemented. The findings below describe the
+> **Status.** All five phases are implemented. The findings below describe the
 > state at `e494a32` and are kept as written — a review edited to match the code
 > stops being a record of what was wrong. `pnpm run measure` reports the current
-> figures; `test/outputScale.test.ts` holds the ceilings. Phases 3 to 5 are
-> outstanding, and Phase 3 item 10 still needs the decision it names.
+> figures; `test/outputScale.test.ts` holds the ceilings.
+>
+> Three calls the plan left open, and how they went:
+>
+> - **Item 10 (the mapping request).** Cached per client rather than made
+>   opt-in. Highlighting *shrinks* the answer — a snippet instead of a whole
+>   stack trace — so making it opt-in would have made the default result larger,
+>   which is the opposite of what Phase 1 is for. The cache removes the
+>   round-trip after the first search per index, and the guard from item 8
+>   removes it entirely for a caller who brings their own `highlight`.
+> - **Item 11 (structured output).** Measured, and it changed the design twice.
+>   Reserving half the budget for the structured payload cut `list_indices` from
+>   365 indices to about half, because the same facts cost roughly twice as much
+>   as JSON as they do as a line; the text is now assembled first and the
+>   structured copy takes the remainder. Letting it fill that remainder then
+>   turned a 26-byte `list_shards` summary into 32 KB, so the structured payload
+>   is now as terse as the text it accompanies. The cost that remains is
+>   `tools/list`: 10 321 → 11 451 bytes for the default fifteen tools, 16 662 →
+>   18 704 with every set enabled.
+> - **Item 13 (splitting `dataTools.ts`).** Not done, deliberately. The
+>   threshold the finding names is roughly twenty tools; there are fifteen, and
+>   the file still reads as a list.
 
 ## The finding that reframes the rest
 

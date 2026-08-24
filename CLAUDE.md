@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 168 tests, mocked at the client connection layer
+pnpm test             # vitest run — 191 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -86,7 +86,7 @@ Three layers, deliberately thin:
 
 1. **`index.ts`** — bootstrap only: `loadConfigFromEnv()` → `StdioServerTransport` → `createElasticsearchMcpServer()` → connect, plus SIGINT shutdown.
 2. **`src/server.ts`** — composition only. Constructs one shared `@elastic/elasticsearch` `Client`, calls the three register modules according to the config flags, and re-exports all tool functions — that re-export block is what `scripts/smoke.mjs` and any library consumer import.
-3. **`src/register/*.ts`** — the registration points, one per tool set (see below). Each declares its tools via `server.tool(name, description, zodShape, handler)`; handlers are one-liners forwarding to a tool function with `esClient` as the first argument.
+3. **`src/register/*.ts`** — the registration points, one per tool set (see below). Each declares its tools via `server.registerTool(name, { title, description, inputSchema, outputSchema?, annotations }, handler)`; handlers are one-liners forwarding to a tool function with `esClient` as the first argument. Two shared modules sit beside them: `schemas.ts` (the `indexName` / `requiredText` validators) and `outputSchemas.ts` (the four output schemas, collected so their shared `total` / `returned` / `omitted` shape is visible at a glance).
 4. **`src/tools/*.ts`** — one file per capability, exporting plain async functions `(esClient, ...args)`. They hold all ES interaction and all response formatting.
 
 ### Three tool sets, gated at registration
@@ -119,15 +119,16 @@ Tools **never throw**:
 
 Errors are caught, logged with `console.error`, and returned as a `text` fragment beginning with `Error:`. This is intentional — the calling model must see the failure as readable content rather than a transport-level exception. Preserve this pattern in new tools; a throw would surface as an opaque MCP error. `scripts/smoke.mjs` depends on it too: it detects failures by scanning fragments for that prefix, and treats an actual exception as a contract violation.
 
-Results are formatted as human/LLM-readable text (multiple fragments: a summary fragment first, then details), not as raw JSON blobs — except where the payload is genuinely structured (`listIndices`, `getMappings` stringify it).
+Results are formatted as human/LLM-readable text (multiple fragments: a summary fragment first, then details), not as raw JSON blobs. Four tools additionally carry a typed `structuredContent` — see below.
 
 ### MCP conformance: what the specification requires and what this server does
 
-Audited against the 2025-06-18 specification. Four points are load-bearing, and one is a deliberate deviation.
+Audited against the 2025-06-18 specification. Five points are load-bearing, and one is a deliberate deviation.
 
 - **`isError: true` on every failure.** The specification separates protocol errors (JSON-RPC) from *tool execution* errors, which are results carrying `isError`. `toolError()` and `toolRefusal()` both set it; success omits it, since the protocol defaults it to false. A guardrail refusal counts as a failure — reporting it as a success would let a model conclude a delete had happened. `test/toolContract.test.ts` asserts the flag for all 26 tools; removing it from `toolResult.ts` fails 27 tests.
 - **Every tool carries `annotations` and a `title`, via `registerTool`.** `server.tool()` is deprecated in SDK 1.30 and cannot pass either. The hints are what a client reads to decide whether to ask the user first, so they are the client-side counterpart of the registration gating — not a replacement for it, since the specification tells clients to distrust annotations from an untrusted server. `idempotentHint` is claimed only where repeating the identical call really leaves the same state: `create_index` fails when the index exists, `delete_index` 404s once it is gone, and `bulk` without an id field creates new documents each time — all four are annotated `false`, and a test enforces that.
 - **Cancellation is bound to the client, not threaded through the tools.** See `src/cancellable.ts`. `withCancellation(esClient, extra.signal)` returns a Proxy whose requests abort when the client cancels; the register modules are the only place that applies it. The alternative — a trailing `signal` parameter on all 26 tool functions — would have changed every public signature that `src/server.ts` re-exports, to say one thing about the client rather than about the arguments.
+- **Structured output on four tools, and only four.** `list_indices`, `list_shards`, `get_index_settings` and `get_mappings` declare an `outputSchema` (`src/register/outputSchemas.ts`) and return `structuredContent`. The pair is not optional: the SDK rejects a *successful* result that omits the payload once a schema is declared — `validateToolOutput` in `server/mcp.js`, which skips the check when `isError` is set, so the failure paths are exempt but the friendly not-found branches are not. `test/outputSchemas.test.ts` parses each tool's real payload with its declared schema, because a mismatch surfaces as a protocol error rather than a tool result. Four rather than twenty-six, because a schema is paid for in every session's `tools/list` and earns it only where a caller would otherwise parse prose: `search` hits are documents of arbitrary shape, `reindex` returns a task id, and a schema saying `object` costs bytes to say nothing.
 - **`src/processSafetyNet.ts` tolerates exactly one stray error.** Aborting a request makes the 7.x client emit a second `RequestAbortedError` outside any promise chain, from the `product-check` EventEmitter callback in `Transport.js`; unowned, it would end the process and take the whole stdio session with it. Only that error *name* passes; anything else is logged and exits non-zero. Do not widen this into a general handler.
 
 Two things the specification asks for that this server does not do:
@@ -139,15 +140,18 @@ Two things the specification asks for that this server does not do:
 
 `src/outputBudget.ts` caps one tool result at `ES_MAX_RESULT_BYTES` (32 KiB by default). This is not tidiness. Measured before it existed: `list_shards` over a year of daily indices returned **385 469 bytes**, about 96 000 tokens, in one result — while the three-tier gating this project is careful about saves 6 058 bytes of *schema*. The tool list was rationed and the tool output was not.
 
-Three rules the helper encodes, each because the alternative was worse:
+Five rules the helper encodes, each because the alternative was worse:
 
 - **The summary survives, the detail goes.** `budgeted({ summary, detail, hint })` keeps every summary fragment — truncating the last one with a marker if even that overruns — and fills the remainder with detail. A caller that loses the summary has lost the answer.
 - **A trim is always announced,** with a hint saying how to ask a smaller question. Silence is the real hazard: a model handed a shortened list with no notice concludes the entry it wanted does not exist, which is a wrong answer rather than a partial one.
 - **Detail is chunked, never one fragment.** Use `chunkedJson(records)`. The first version emitted the dump as a single fragment, so the budget dropped it whole and `verbose` answered with 145 bytes — a summary and an apology — where the caller had explicitly asked for detail. `scripts/measure-output.mjs` is what caught that.
 
-`test/outputScale.test.ts` holds the ceilings against the same fixtures the figures came from, and `test/support/scaleFixtures.ts` is shared with the measurement script so a number in `docs/architecture-review-2026-08-24.md` can be re-run rather than rebuilt.
+- **The text is assembled first; `structuredContent` gets what is left.** `budgeted({ … structured: (room) => … })` takes a callback, not a value, precisely so the room is known only after the fragments are laid out. The first version reserved half the budget for the structured half, and measuring it settled the question: `list_indices` went from listing all 365 indices to listing about half, because the same five facts cost roughly twice as much as JSON as they do as a line. Adding a machine-readable copy must not degrade the answer a model reads. Use `fitRecords(records, room)`, and report `returned` against `total` so the trim is a number rather than prose.
+- **The structured payload is as terse as the text it accompanies.** `list_shards` without `verbose` answers in 26 bytes; letting its structured half fill the remaining budget with 2190 `STARTED` rows nobody asked for turned that into 32 KB, measured, on the first attempt. `verbose` means "give me the rows" in *both* channels.
 
-`list_indices` and `list_shards` put their JSON behind `verbose` (default off); `search` clamps `size` to `MAX_SEARCH_SIZE` (100) and reports the `from` to page with. `list_nodes` deliberately has no `verbose`: nodes number in the tens, so it was never the hazard, and adding a switch there would have been cargo-culting the fix.
+`test/outputScale.test.ts` holds the ceilings against the same fixtures the figures came from, and its `resultBytes` counts the structured payload too — measuring only the fragments would report a result as half its size the moment a tool gained an output schema. `scripts/measure-output.mjs` carries the same fixture shapes in plain JS: two definitions of one thing, kept in step by the counts each side asserts (365 / 2190 / 500), because the script is deliberately outside the build and sharing one file would mean dropping the typing on the fixtures to tidy the script.
+
+`list_indices` and `list_shards` put their *text* JSON behind `verbose` (default off — the structured payload is where a parser should look); `search` clamps `size` to `MAX_SEARCH_SIZE` (100) and reports the `from` to page with. `list_nodes` deliberately has no `verbose`: nodes number in the tens, so it was never the hazard, and adding a switch there would have been cargo-culting the fix.
 
 ### The 7.x client API shape
 
@@ -185,7 +189,7 @@ Do not restate what the tool name already says, and do not prefix a field descri
 ### Adding a tool
 
 1. Create `src/tools/<name>.ts` exporting `async function <name>(esClient: Client, ...)`.
-2. Add it to the re-export block in `src/server.ts`, then register it in the register module matching its blast radius — `dataTools` if it only reads or writes documents, `adminTools` if it is a read-only diagnostic, `destructiveTools` if it destroys anything. Use zod validators with `.describe()` on every field: those descriptions are what the client model reads to decide how to call the tool.
+2. Add it to the re-export block in `src/server.ts`, then register it in the register module matching its blast radius — `dataTools` if it only reads or writes documents, `adminTools` if it is a read-only diagnostic, `destructiveTools` if it destroys anything. Use zod validators with `.describe()` on every field: those descriptions are what the client model reads to decide how to call the tool. For an index or another required identifier, use `indexName(description)` / `requiredText(description, message)` from `src/register/schemas.js` — those nineteen validators were nineteen copies before, and the description stays an argument because the wording differs on purpose (one of them is a guardrail).
 3. Add tests in `test/<name>.test.ts`; add the tool to the `TOOLS` table in `test/toolContract.test.ts` so the never-throws contract is checked for it too, and to the matching list in `test/server.test.ts` (`DATA_TOOLS` / `ADMIN_TOOLS` / `DESTRUCTIVE_TOOLS`) — the gating tests compare those lists against `tools/list` exactly, so a tool registered in the wrong set fails.
 4. Add a check to `scripts/smoke.mjs`.
 5. `pnpm run typecheck`, `pnpm test`, `pnpm run build`.
@@ -230,11 +234,17 @@ Config is validated lazily: `ConfigSchema.parse()` runs inside `createClientOpti
 
 ### Behavioral details worth knowing
 
-- `search` fetches the index mapping first and auto-injects a `highlight` block for every `text` field (`<em>` tags). Highlighted fields are rendered before non-highlighted `_source` fields. `dense_vector` fields are excluded: Elasticsearch cannot highlight a vector. The old condition (`"dense_vector" in fieldData`) tested for a *key* of that name, which no mapping has, so it never matched — the documentation claimed a behaviour the code never had.
+- `search` auto-injects a `highlight` block over every `text` field (`<em>` tags), and highlighted fields are rendered before the remaining `_source` fields. Four rules, each of which was a defect before it was a rule:
+  - **A caller-supplied `highlight` is left alone**, and then no mapping request is made at all — the caller has already said what to highlight. It used to be overwritten silently: a request carrying `pre_tags: ["**"]` reached the cluster with `["<em>"]`.
+  - **The mapping walk recurses** (`src/tools/mappingFields.ts`), so `kubernetes.pod.name` is highlighted by its dotted path, as is a `text` multi-field such as `process.command_line.text`. Reading top-level `properties` only meant the feature mostly did not fire on the logging mappings it existed for.
+  - **The mapping is cached per client**, for the life of the process, keyed through `unwrapClient()` — every tool call arrives behind a fresh cancellation wrapper, so keying on the object the tool was handed would never hit. The accepted cost is a field added mid-session going unhighlighted until restart; the hits and counts are unaffected.
+  - **A wildcard or alias unions the mappings returned.** The response is keyed by the concrete indices it resolved to, so the old `body[index]` lookup found nothing for exactly the callers most likely to want highlighting.
+  - Selecting `type === "text"` is what excludes a `dense_vector`, which Elasticsearch cannot highlight — by construction, rather than by a list of excluded types that someone has to maintain.
 - `bulk` uses `refresh: true`, so imported docs are immediately searchable; per-document failures are reported individually rather than failing the call.
 - `reindex` uses `wait_for_completion: false` and returns a task ID for `GET _tasks/<id>`.
 - **`delete_by_query` does the same, and this is a correctness fix rather than a preference.** Run synchronously it blocked until Elasticsearch finished; past the request timeout it reported `Error: Request timed out` while the cluster carried on deleting — telling the model a destructive operation had failed while it was succeeding, and inviting a retry against a moving target. It returns a task id; the deleted count now lives in the task document, so `get_task` is where it is read. **Surface change:** the result no longer carries a count.
 - `bulk` caps `documents` at `MAX_BULK_DOCUMENTS` (1000) and takes `refresh`, defaulting true. Always-refreshing is right for the small interactive import a model makes — it can verify its own work — and wrong for a bulk load, where forcing a refresh per batch is the expensive part.
 - `create_mapping` creates the index if it doesn't exist, otherwise calls `putMapping`, and always echoes the resulting mapping back. It relies on the 7.x client casting `HEAD` responses to a boolean — `indices.exists<boolean>()` returns `body: false` on 404 instead of throwing. Keep the explicit `<boolean>` generic: without it the response type is `Record<string, any>`, which is always truthy.
+- `get_mappings` answers with a **flattened field listing** — one `path: type` line per leaf field, dotted, nested and multi-fields included — and the raw mapping as trimmable detail. **Surface change**, and the reason is the same as everywhere else: it used to return the whole mapping pretty-printed and nothing else, unbudgeted, which is around 80 KB on a thousand-field logging index. It was the one unbounded tool in the default set that the first output-budget pass missed, because it had never been measured.
 - `get_index_template` passes `{ ignore: [404] }`, so a missing named template yields the "No template found" message instead of an `Error:` fragment. Elasticsearch answers 404 there, not an empty list — without the option that friendly message was unreachable code.
 - `list_indices` passes `pattern` straight to `cat.indices`, so it is an ES **wildcard** (`log-*`), defaulting to `*` — the tool description used to claim regex support, and `test/server.test.ts` now fails if that claim comes back. It requests `bytes: "b"` and reads the dotted keys `docs.count` / `store.size`: the camelCase aliases in `estypes` are type-level only and `undefined` at runtime.

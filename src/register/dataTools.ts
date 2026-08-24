@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Client } from "@elastic/elasticsearch";
 import { withCancellation } from "../cancellable.js";
+import { indexName, requiredText } from "./schemas.js";
+import { GET_MAPPINGS_OUTPUT, LIST_INDICES_OUTPUT } from "./outputSchemas.js";
 import { listIndices } from "../tools/listIndices.js";
 import { getMappings } from "../tools/getMappings.js";
 import { search } from "../tools/search.js";
@@ -47,8 +49,9 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
         verbose: z
           .boolean()
           .optional()
-          .describe("Also return the same data as JSON, for parsing rather than reading."),
+          .describe("Also repeat the rows as JSON text, for a client that does not read structured output."),
       },
+      outputSchema: LIST_INDICES_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ pattern, verbose }, extra) => {
@@ -61,14 +64,11 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
     "get_mappings",
     {
       title: "Get index mappings",
-      description: "Get the field mappings of one index. Give a concrete index name: an alias or a wildcard returns an empty mapping.",
+      description: "List the fields of one index as dotted paths with their types, nested fields included, then the raw mapping. Give a concrete index name: an alias or a wildcard returns nothing.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index name"),
+        index: indexName("Index name"),
       },
+      outputSchema: GET_MAPPINGS_OUTPUT,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => {
@@ -83,11 +83,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Search documents",
       description: "Search one index with a query DSL body. Matching text fields are highlighted. Paging goes inside queryBody (`size`, `from`); `size` is capped at 100 per call, so page with `from` for more.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index to search"),
+        index: indexName("Index to search"),
 
         queryBody: z
           .record(z.string(), z.any())
@@ -142,11 +138,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Create an index",
       description: "Create a new index. Fails if it already exists — use create_mapping to add fields to an existing one.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index name"),
+        index: indexName("Index name"),
       
         settings: z
           .record(z.string(), z.any())
@@ -172,11 +164,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Create or update a mapping",
       description: "Add or update fields on an index, creating the index if it does not exist. Elasticsearch cannot change the type of an existing field.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index name"),
+        index: indexName("Index name"),
       
         mappings: z
           .record(z.string(), z.any())
@@ -196,11 +184,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Bulk index documents",
       description: "Index up to 1000 documents in one call. The index is refreshed by default, so they are searchable immediately; per-document failures are reported without failing the call.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Target index"),
+        index: indexName("Target index"),
       
         documents: z
           .array(z.record(z.string(), z.any()))
@@ -232,17 +216,9 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Reindex into another index",
       description: "Copy documents between indices. Asynchronous: returns a task id at once and the copy is still running on return — poll it with GET _tasks/<id>.",
       inputSchema: {
-        sourceIndex: z
-          .string()
-          .trim()
-          .min(1, "Source index name is required")
-          .describe("Source index"),
+        sourceIndex: indexName("Source index", "Source index name is required"),
       
-        destIndex: z
-          .string()
-          .trim()
-          .min(1, "Destination index name is required")
-          .describe("Destination index, created if absent"),
+        destIndex: indexName("Destination index, created if absent", "Destination index name is required"),
       
         query: z
           .record(z.string(), z.any())
@@ -285,11 +261,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Create or update an index template",
       description: "Create or update a composable index template (Elasticsearch 7.8+). It applies only to indices created after it, never to existing ones.",
       inputSchema: {
-        name: z
-          .string()
-          .trim()
-          .min(1, "Template name is required")
-          .describe("Template name"),
+        name: requiredText("Template name", "Template name is required"),
       
         indexPatterns: z
           .array(z.string())
@@ -343,11 +315,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Count documents",
       description: "Count the documents matching a query, without transferring any. Cheaper than search when only the number matters.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index to count in"),
+        index: indexName("Index to count in"),
 
         query: z
           .record(z.string(), z.any())
@@ -368,17 +336,9 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Get a document by id",
       description: "Fetch one document by its _id. Reports that it is absent rather than failing.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Index holding the document"),
+        index: indexName("Index holding the document"),
 
-        id: z
-          .string()
-          .trim()
-          .min(1, "Document id is required")
-          .describe("Document _id"),
+        id: requiredText("Document _id", "Document id is required"),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
@@ -413,11 +373,7 @@ export function registerDataTools(server: McpServer, esClient: Client): void {
       title: "Get task progress",
       description: "Check an asynchronous task, such as the one reindex returns: progress, completion and failure.",
       inputSchema: {
-        taskId: z
-          .string()
-          .trim()
-          .min(1, "Task id is required")
-          .describe("Task id as returned by reindex, e.g. node-1:428"),
+        taskId: requiredText("Task id as returned by reindex, e.g. node-1:428", "Task id is required"),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },

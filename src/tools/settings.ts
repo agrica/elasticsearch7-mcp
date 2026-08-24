@@ -1,5 +1,6 @@
 import { Client, estypes } from "@elastic/elasticsearch";
 import { textFragment, toolError, type ToolResult } from "../toolResult.js";
+import { budgeted } from "../outputBudget.js";
 
 /**
  * An index's settings. `refresh_interval`, `number_of_replicas` and
@@ -18,21 +19,32 @@ export async function getIndexSettings(
     const settings = response.body[index]?.settings;
 
     if (!settings) {
-      return {
-        content: [
+      return budgeted({
+        summary: [
           textFragment(
             `No settings returned for "${index}". It may be an alias or a pattern rather than a concrete index.`
           ),
         ],
-      };
+        // Still structured, and still a success: the tool declares an
+        // `outputSchema`, and the SDK rejects a successful result that omits the
+        // payload. `found: false` is the honest way to say nothing came back.
+        structured: () => ({ index, found: false }),
+      });
     }
 
-    return {
-      content: [
+    return budgeted({
+      summary: [
         textFragment(`Settings of "${index}"`),
         textFragment(JSON.stringify(settings, null, 2)),
       ],
-    };
+      // `settings` is optional in the output schema, which is what lets it be
+      // left out when it does not fit rather than pushing the result over the
+      // budget it is measured against.
+      structured: (room) =>
+        Buffer.byteLength(JSON.stringify(settings), "utf8") < room
+          ? { index, found: true, settings }
+          : { index, found: true },
+    });
   } catch (error) {
     return toolError("Get index settings failed", error);
   }

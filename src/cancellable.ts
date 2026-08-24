@@ -21,6 +21,31 @@ export function withCancellation(client: Client, signal: AbortSignal): Client {
   return wrap(client, signal, 0) as Client;
 }
 
+/**
+ * The one property a wrapper answers itself: the client it stands in front of.
+ */
+const TARGET = Symbol("elasticsearch7-mcp.proxyTarget");
+
+/**
+ * Recover the client behind a wrapper, or return a bare client unchanged.
+ *
+ * A wrapper exists per *call*, because the signal it binds belongs to that one
+ * call. So anything wanting to remember something about the *cluster* across
+ * calls cannot key on the object it was handed: two calls to the same cluster
+ * arrive as two different objects, and a cache keyed on them never hits — it
+ * silently degrades to no cache at all, which is the kind of defect that shows
+ * up as a performance report months later rather than as a failing test.
+ *
+ * Keying on the index name in module state instead would be wrong for a
+ * different reason: `scripts/measure-output.mjs` and the tests build several
+ * clients against different fixtures under the same index names, and a
+ * process-wide cache would hand one cluster's fields to another.
+ */
+export function unwrapClient(client: Client): Client {
+  const target = (client as unknown as Record<symbol, unknown>)[TARGET];
+  return (target as Client | undefined) ?? client;
+}
+
 /** A promise from a 7.x client call: awaitable, and abortable mid-flight. */
 function isAbortable(value: unknown): value is Promise<unknown> & {
   abort: () => void;
@@ -36,6 +61,8 @@ function isAbortable(value: unknown): value is Promise<unknown> & {
 function wrap<T extends object>(target: T, signal: AbortSignal, depth: number): T {
   return new Proxy(target, {
     get(obj, property) {
+      if (property === TARGET) return obj;
+
       // `obj`, not the proxy, is the receiver: a getter or a method that uses
       // `this` then sees the real client. That is what keeps the client's own
       // internals — transport, connection pool, serializer — entirely

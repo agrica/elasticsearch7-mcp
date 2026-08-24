@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Client } from "@elastic/elasticsearch";
 import { withCancellation } from "../cancellable.js";
+import { indexName, requiredText } from "./schemas.js";
 import {
   deleteByQuery,
   deleteDocument,
@@ -36,11 +37,7 @@ export function registerDestructiveTools(
       title: "Delete an index template",
       description: "Delete a composable index template. Indices already created keep their settings.",
       inputSchema: {
-        name: z
-          .string()
-          .trim()
-          .min(1, "Template name is required")
-          .describe("Template name")
+        name: requiredText("Template name", "Template name is required")
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -56,11 +53,7 @@ export function registerDestructiveTools(
       title: "Delete an index",
       description: "Delete an index and every document in it. Irreversible. One concrete index name only: wildcards and lists are refused.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Exact index name. No wildcard, no comma-separated list."),
+        index: indexName("Exact index name. No wildcard, no comma-separated list."),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -76,17 +69,9 @@ export function registerDestructiveTools(
       title: "Delete a document",
       description: "Delete one document by its _id. Irreversible, though a missing document is reported rather than treated as a failure.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Exact index name"),
+        index: indexName("Exact index name"),
 
-        id: z
-          .string()
-          .trim()
-          .min(1, "Document id is required")
-          .describe("Document _id"),
+        id: requiredText("Document _id", "Document id is required"),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
@@ -102,11 +87,7 @@ export function registerDestructiveTools(
       title: "Delete documents by query",
       description: "Delete every document a query matches. Irreversible and unbounded: run count with the same query first to see how many would go. Asynchronous — it returns a task id and the deletion continues in the background, so follow it with get_task.",
       inputSchema: {
-        index: z
-          .string()
-          .trim()
-          .min(1, "Index name is required")
-          .describe("Exact index name. No wildcard, no comma-separated list."),
+        index: indexName("Exact index name. No wildcard, no comma-separated list."),
 
         query: z
           .record(z.string(), z.any())

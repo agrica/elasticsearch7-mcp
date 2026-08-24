@@ -31,11 +31,11 @@ nothing in the agent's context.
 * `get_aliases`: which aliases point at which indices
 
 #### Mappings
-* `get_mappings`: field mappings of an index
+* `get_mappings`: the fields of an index, as dotted paths with their types, then the raw mapping
 * `create_mapping`: create or update the mapping of an index
 
 #### Search and data
-* `search`: run a query DSL search, with highlighting injected automatically
+* `search`: run a query DSL search, with highlighting injected over every text field — nested ones included — unless the query brings its own `highlight`
 * `count`: how many documents match, without transferring any
 * `get_document`: fetch one document by id
 * `bulk`: index many documents at once
@@ -248,9 +248,17 @@ more than most sessions can hold.
 When a result is trimmed it says so, says how much went, and says how to ask a
 smaller question. Three tools shape their answers around it:
 
-* `list_indices` and `list_shards` return a readable summary; the parseable JSON
-  is behind `verbose`.
+* `list_indices` and `list_shards` return a readable summary; the same rows as
+  text are behind `verbose`.
 * `search` caps `size` at 100 per call and tells you the `from` to page with.
+* `get_mappings` lists the fields first and the raw mapping second, so a
+  thousand-field index still answers the question it was asked.
+
+Four tools — `list_indices`, `list_shards`, `get_index_settings` and
+`get_mappings` — also return their answer as typed structured output, so a
+client can read the rows instead of parsing the text. It is assembled from
+whatever room the readable answer left, and reports `returned` against `total`
+so a partial listing is visible as a number.
 
 Run `pnpm run measure` against the built output to see the current figures for
 your own configuration.
