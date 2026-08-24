@@ -2,6 +2,7 @@
 
 Date : 2026-08-24
 Statut : proposé, en attente de relecture
+Conformité : audité contre MCP 2025-06-18 et 2025-11-25, OAuth 2.1 et RFC 9700
 Version cible : 0.2.0
 
 ## Problème
@@ -40,7 +41,10 @@ par `client_credentials`, le garder frais, et le présenter à chaque requête.
 | Authentification cliente | `client_secret_post` par défaut, `client_secret_basic` au choix | Keycloak, Azure AD, Auth0 et Ping acceptent tous `post` ; `basic` existe pour les IdP qui refusent l'un des deux |
 | Secret | `ES_OAUTH_CLIENT_SECRET` ou `..._FILE` | Un secret monté en fichier n'apparaît pas dans `docker inspect` ni dans l'environnement du processus |
 | Repli non préfixé | Aucun | Un `CLIENT_SECRET` ambiant qui déciderait de l'identité du serveur est le danger de `USERNAME` documenté dans `CLAUDE.md`, en pire |
-| Rejeu sur 401 | Hors périmètre 0.2.0 | Avec un renouvellement proactif, un 401 signifie jeton révoqué, dérive d'horloge > 60 s, ou mauvais `scope`/`audience` — trois cas qu'un rejeu ne corrige pas. Un message d'erreur nommant le point de terminaison et l'heure d'obtention diagnostique mieux |
+| `ES_OAUTH_TOKEN_URL` | **HTTPS exigé**, `http://` toléré uniquement sur boucle locale | OAuth 2.1 §1.5 et MCP : « All authorization server endpoints **MUST** be served over HTTPS ». Ici le risque n'est pas le SSRF — l'URL vient de l'opérateur, pas d'une source hostile — c'est le `client_secret` qui traverserait le réseau en clair. Pas de drapeau de contournement : la boucle locale suffit aux tests, et un `ES_OAUTH_INSECURE` finirait en production |
+| Diagnostic sur 401/403 | Lire `WWW-Authenticate` et rapporter `error` et `scope` | C'est la forme que la révision 2025-11-25 normalise : `403` + `error="insufficient_scope"` + `scope="…"`. Transformer « 403 Forbidden » en « la passerelle veut `es:write`, `ES_OAUTH_SCOPE` porte `es:read` » est plus utile qu'un rejeu, et c'est ce qui remplace le rejeu écarté |
+| Secret | Toujours `.trim()`, source fichier comprise, et vide = refus | Un secret collé dans une configuration traîne une fin de ligne — la documentation de Claude Code avertit explicitement de ce cas — et un fichier écrit avec `echo` en contient toujours une. Non coupée, elle produit un `invalid_client` opaque |
+| Rejeu sur 401 | Hors périmètre 0.2.0 | Avec un renouvellement proactif, un 401 signifie jeton révoqué, dérive d'horloge > 60 s, ou mauvais `scope`/`audience` — trois cas qu'un rejeu ne corrige pas. Le diagnostic `WWW-Authenticate` ci-dessus est le remplacement utile |
 | Transport HTTP | `fetch` global + `AbortSignal.timeout(10 s)` | Aucune dépendance nouvelle ; les deux sont natifs sur le Node 24 du `.nvmrc` |
 
 Options écartées pour le point d'injection, parce que c'est là que le design se
@@ -88,6 +92,58 @@ ceux de la version épinglée.
   de jetons d'Elasticsearch serait atteignable — c'est une option écartée, pas
   une option absente.
 - Node 24 : `fetch` et `AbortSignal.timeout` sont natifs (vérifié à l'exécution).
+
+## Conformité à la spécification MCP
+
+Vérifié sur les pages de la spécification, révisions 2025-06-18 **et** 2025-11-25 :
+le texte des deux clauses ci-dessous est identique mot pour mot dans les deux.
+
+- **La spécification d'autorisation MCP ne s'applique pas à ce serveur, et le dit
+  elle-même** : « Implementations using an STDIO transport **SHOULD NOT** follow
+  this specification, and instead retrieve credentials from the environment. »
+  Tout l'appareil OAuth de MCP — PKCE, RFC 8707 `resource`, RFC 9728 *protected
+  resource metadata*, enregistrement dynamique — concerne l'axe **client MCP →
+  serveur MCP** sur transport HTTP. Notre axe est l'autre : **serveur MCP →
+  API amont**. Lire les variables d'environnement est donc littéralement ce que
+  la spécification prescrit, pas un contournement.
+- **Le rôle de client OAuth vers l'amont est explicitement prévu** : « If the MCP
+  server makes requests to upstream APIs, it may act as an OAuth client to them.
+  The access token used at the upstream API is a separate token, issued by the
+  upstream authorization server. The MCP server **MUST NOT** pass through the
+  token it received from the MCP client. » C'est exactement ce design, et le
+  `MUST NOT` est satisfait par construction : un serveur stdio ne reçoit aucun
+  jeton de son client. Noté ici pour qu'une évolution future ne « améliore » pas
+  ce point en relayant un jeton d'appelant — ce serait l'anti-patron *token
+  passthrough*, explicitement interdit.
+- **Vol de jeton** : « tokens cached or logged on the server can access protected
+  resources ». D'où la règle : le jeton vit **en mémoire seulement**, n'est jamais
+  écrit sur disque, jamais journalisé, jamais renvoyé dans un résultat d'outil.
+- **En-tête, jamais l'URL** : OAuth 2.1 §5.1.1 et RFC 9700 (« Clients **MUST
+  NOT** pass access tokens in a URI query parameter »). `child({ auth: { bearer } })`
+  produit un en-tête `Authorization`, donc satisfait par construction.
+- **RFC 9700 §2.4 sur le grant *resource owner password credentials* : « MUST NOT
+  be used ».** Cela donne une raison normative, et non une préférence, à l'écart
+  du service de jetons d'Elasticsearch (`/_security/oauth2/token`, grant
+  `password`) listé hors périmètre : sa forme est celle du grant que le BCP
+  interdit.
+- **RFC 9700 sur l'authentification cliente** : « It is RECOMMENDED to use
+  asymmetric cryptography for client authentication, such as mutual TLS for OAuth
+  2.0 or signed JWTs. » Le BCP ne déprécie pas `client_secret_post` ni
+  `client_secret_basic`, mais recommande mieux. `private_key_jwt` et mTLS restent
+  hors périmètre 0.2.0, et c'est désormais un écart nommé plutôt qu'un oubli.
+- **Minimisation des portées** (section *Scope Minimization* du document de bonnes
+  pratiques) : éviter les portées fourre-tout, demander le minimum. Conséquence
+  concrète ici, à documenter plutôt qu'à coder : **la portée OAuth et le gating
+  des jeux d'outils doivent s'accorder.** Un déploiement sans
+  `ES_ALLOW_DESTRUCTIVE` devrait demander une portée en lecture seule ; demander
+  une portée d'écriture pour un serveur dont les outils d'écriture ne sont pas
+  enregistrés élargit le rayon de souffle du secret sans rien apporter.
+
+Rien dans la révision 2025-11-25 ne change ce design. Elle ajoute les *Client ID
+Metadata Documents*, la stratégie de sélection des portées et le flux de montée
+en portée — tous sur l'axe client MCP → serveur MCP. `CLAUDE.md` devrait
+toutefois cesser d'écrire « audité contre 2025-06-18 » sans dire que la révision
+suivante a été relue.
 
 ## Portée des modifications
 
@@ -140,7 +196,7 @@ ceux de la version épinglée.
 
 | Variable | Rôle |
 |---|---|
-| `ES_OAUTH_TOKEN_URL` | Point de terminaison du jeton. Sa présence **active** le facteur |
+| `ES_OAUTH_TOKEN_URL` | Point de terminaison du jeton. Sa présence **active** le facteur. HTTPS exigé, sauf boucle locale |
 | `ES_OAUTH_CLIENT_ID` | Identifiant client. Requis |
 | `ES_OAUTH_CLIENT_SECRET` | Secret client. Requis, sauf via le fichier ci-dessous |
 | `ES_OAUTH_CLIENT_SECRET_FILE` | Chemin d'un fichier contenant le secret |
@@ -160,7 +216,12 @@ ceux de la version épinglée.
   différent après rotation, et un client de base intact sans OAuth2.
 - `test/config.test.ts` — précédence des trois facteurs, caractère fatal de la
   configuration partielle, lecture du secret par fichier, absence de repli non
-  préfixé.
+  préfixé, **refus d'un `ES_OAUTH_TOKEN_URL` en `http://` non local**, et secret
+  débarrassé de sa fin de ligne depuis les deux sources.
+- Un test du diagnostic : une réponse `403` portant
+  `WWW-Authenticate: Bearer error="insufficient_scope", scope="es:write"` doit
+  produire un message nommant la portée manquante. C'est ce qui justifie de
+  n'avoir pas implémenté le rejeu.
 - Un test de session MCP réelle : OAuth2 configuré vers un point de terminaison
   injoignable, un appel d'outil, et le résultat doit être un `isError` portant le
   message d'obtention — pas une exception de protocole. C'est l'assertion qui
@@ -176,7 +237,23 @@ ceux de la version épinglée.
 `README.md` (tableau de configuration, une section sur le montage avec
 passerelle et la contrainte 7.x), `smithery.yaml` (les sept clés camelCase),
 `Dockerfile` (les variables d'environnement, vides), et `CLAUDE.md` (précédence,
-point d'injection, et le fait que le *product check* est partagé).
+point d'injection, le fait que le *product check* est partagé, et la révision de
+spécification réellement relue).
+
+Deux points appartiennent à la documentation et non au code, et ils comptent
+autant :
+
+- **Le secret n'a pas sa place dans un `.mcp.json`.** Un `.mcp.json` de portée
+  projet est versionné. Trois façons supportées de l'éviter, à montrer dans le
+  README : l'expansion `"ES_OAUTH_CLIENT_SECRET": "${ES_OAUTH_CLIENT_SECRET}"`
+  (Claude Code substitue `${VAR}` et `${VAR:-défaut}` dans `command`, `args` et
+  `env` d'un serveur stdio), la portée locale dans `~/.claude.json` — que la
+  documentation recommande explicitement « for servers with credentials you don't
+  want in version control » — ou `ES_OAUTH_CLIENT_SECRET_FILE` vers un fichier
+  monté.
+- **Accorder la portée OAuth et le jeu d'outils.** Une portée en lecture seule
+  pour un déploiement sans `ES_ALLOW_DESTRUCTIVE`, une portée d'écriture
+  seulement là où les outils d'écriture sont réellement enregistrés.
 
 ## Hors périmètre, délibérément
 
@@ -186,7 +263,8 @@ point d'injection, et le fait que le *product check* est partagé).
   flux retenu, non demandé.
 - **Les flux `authorization_code` et `device_code`.** Ils supposent un
   navigateur et un utilisateur ; un serveur stdio n'a ni l'un ni l'autre.
-- **mTLS et le `private_key_jwt`** comme authentification cliente.
+- **mTLS et le `private_key_jwt`** comme authentification cliente — écart nommé
+  par rapport à la recommandation de RFC 9700, pas un oubli.
 - **Le rejeu sur 401** et la révocation du jeton à l'extinction.
 
 ## Interaction connue, acceptée
