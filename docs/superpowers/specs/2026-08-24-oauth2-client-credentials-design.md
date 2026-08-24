@@ -43,7 +43,7 @@ par `client_credentials`, le garder frais, et le présenter à chaque requête.
 | Repli non préfixé | Aucun | Un `CLIENT_SECRET` ambiant qui déciderait de l'identité du serveur est le danger de `USERNAME` documenté dans `CLAUDE.md`, en pire |
 | `ES_OAUTH_TOKEN_URL` | **HTTPS exigé**, `http://` toléré uniquement sur boucle locale | OAuth 2.1 §1.5 et MCP : « All authorization server endpoints **MUST** be served over HTTPS ». Ici le risque n'est pas le SSRF — l'URL vient de l'opérateur, pas d'une source hostile — c'est le `client_secret` qui traverserait le réseau en clair. Pas de drapeau de contournement : la boucle locale suffit aux tests, et un `ES_OAUTH_INSECURE` finirait en production |
 | Diagnostic sur 401/403 | Lire `WWW-Authenticate` et rapporter `error` et `scope` | C'est la forme que la révision 2025-11-25 normalise : `403` + `error="insufficient_scope"` + `scope="…"`. Transformer « 403 Forbidden » en « la passerelle veut `es:write`, `ES_OAUTH_SCOPE` porte `es:read` » est plus utile qu'un rejeu, et c'est ce qui remplace le rejeu écarté |
-| Secret | Toujours `.trim()`, source fichier comprise, et vide = refus | Un secret collé dans une configuration traîne une fin de ligne — la documentation de Claude Code avertit explicitement de ce cas — et un fichier écrit avec `echo` en contient toujours une. Non coupée, elle produit un `invalid_client` opaque |
+| Fin de ligne du secret | Toujours `.trim()`, source fichier comprise, et vide = refus | Un secret collé dans une configuration traîne une fin de ligne — la documentation de Claude Code avertit explicitement de ce cas — et un fichier écrit avec `echo` en contient toujours une. Non coupée, elle produit un `invalid_client` opaque |
 | Rejeu sur 401 | Hors périmètre 0.2.0 | Avec un renouvellement proactif, un 401 signifie jeton révoqué, dérive d'horloge > 60 s, ou mauvais `scope`/`audience` — trois cas qu'un rejeu ne corrige pas. Le diagnostic `WWW-Authenticate` ci-dessus est le remplacement utile |
 | Transport HTTP | `fetch` global + `AbortSignal.timeout(10 s)` | Aucune dépendance nouvelle ; les deux sont natifs sur le Node 24 du `.nvmrc` |
 
@@ -154,6 +154,12 @@ suivante a été relue.
   le cache, le *single-flight*, le calcul d'expiration, la construction de la
   requête selon `authStyle`, et la traduction d'une réponse d'erreur en message.
   Ne connaît ni Elasticsearch ni MCP.
+
+  La traduction d'erreur ne recopie **jamais** le corps de la réponse : elle en
+  extrait les seuls champs que la RFC 6749 §5.2 définit — `error` et
+  `error_description` — plus le code HTTP. Un IdP qui répercute les paramètres
+  reçus dans son message d'erreur ferait autrement remonter le `client_secret`
+  jusque dans un résultat d'outil, c'est-à-dire dans le contexte du modèle.
 - **`src/auth/clientSource.ts`** (nouveau) — `ClientSource = () => Promise<Client>`.
   Sans OAuth2 : renvoie le client de base. Avec : mémoïse
   `base.child({ auth: { bearer } })` par chaîne de jeton, de sorte qu'un enfant
@@ -164,6 +170,29 @@ suivante a été relue.
   OAuth2 est configuré. Le `.refine()` se déclenche au `ConfigSchema.parse()` de
   `createElasticsearchMcpServer`, donc au démarrage, et sort par le `catch` de
   `main()` en `Server error: …` — le chemin qu'un `ES_HOST` absent emprunte déjà.
+
+  C'est aussi ici que le secret est coupé : `.trim()` sur les deux sources, et un
+  résultat vide est traité comme une configuration partielle, donc fatal. Le
+  schéma valide en plus que `ES_OAUTH_TOKEN_URL` est en `https://`, la boucle
+  locale exceptée.
+- **`src/toolResult.ts`** — `toolError` enrichit un échec portant un 401 ou un
+  403 avec ce que dit son en-tête `WWW-Authenticate` : `error` et `scope`, et rien
+  d'autre.
+
+  C'est le bon endroit, et pas par commodité : `toolError` est déjà le seul
+  module qui décide ce qu'une erreur laisse passer vers le modèle — il ne
+  transmet que `error.message`, jamais l'objet d'erreur, précisément parce que le
+  `meta` d'une erreur du client Elasticsearch contient l'URL du nœud, laquelle
+  peut porter des identifiants en clair. La même contrainte s'applique à ce que
+  l'on ajoute : deux champs nommés, extraits de l'en-tête, jamais l'ensemble des
+  en-têtes.
+
+  Noter que ce chemin est distinct de celui de l'échec d'obtention, et les deux
+  doivent rester séparés : un jeton qu'on n'a pas pu obtenir remonte par
+  `withClient` avant que l'outil ne s'exécute ; un jeton obtenu mais refusé par
+  la passerelle remonte par le `catch` de l'outil lui-même. Le premier dit « l'IdP
+  n'a pas répondu », le second « la passerelle veut une autre portée ». Les
+  confondre produirait le message trompeur dans les deux sens.
 - **`src/server.ts`** — construit le `ClientSource`, le passe aux trois modules
   d'enregistrement, et ajoute une ligne stderr `Auth: …` nommant le facteur
   retenu et le point de terminaison, sans secret. Émet un avertissement si
@@ -218,10 +247,12 @@ suivante a été relue.
   configuration partielle, lecture du secret par fichier, absence de repli non
   préfixé, **refus d'un `ES_OAUTH_TOKEN_URL` en `http://` non local**, et secret
   débarrassé de sa fin de ligne depuis les deux sources.
-- Un test du diagnostic : une réponse `403` portant
+- `test/toolContract.test.ts` — le diagnostic, là où vit déjà le contrat de
+  `toolResult` : une erreur portant
   `WWW-Authenticate: Bearer error="insufficient_scope", scope="es:write"` doit
-  produire un message nommant la portée manquante. C'est ce qui justifie de
-  n'avoir pas implémenté le rejeu.
+  produire un message nommant la portée manquante, et **rien du reste des
+  en-têtes**. C'est ce qui justifie de n'avoir pas implémenté le rejeu, donc
+  l'assertion qui doit tenir pour que cet écart reste défendable.
 - Un test de session MCP réelle : OAuth2 configuré vers un point de terminaison
   injoignable, un appel d'outil, et le résultat doit être un `isError` portant le
   message d'obtention — pas une exception de protocole. C'est l'assertion qui
@@ -258,7 +289,10 @@ autant :
 ## Hors périmètre, délibérément
 
 - **Le service de jetons d'Elasticsearch** (`POST /_security/oauth2/token`,
-  grant `password`). Atteignable, mais ce n'est pas le montage retenu.
+  grant `password`). Atteignable — `client.security.getToken` existe — mais deux
+  raisons l'écartent, et la seconde n'est pas une préférence : ce n'est pas le
+  montage retenu, et sa forme est celle du grant *resource owner password
+  credentials* que RFC 9700 §2.4 interdit (« MUST NOT be used »).
 - **Un jeton *bearer* statique** (`ES_BEARER_TOKEN`). Sous-ensemble trivial du
   flux retenu, non demandé.
 - **Les flux `authorization_code` et `device_code`.** Ils supposent un
@@ -266,6 +300,21 @@ autant :
 - **mTLS et le `private_key_jwt`** comme authentification cliente — écart nommé
   par rapport à la recommandation de RFC 9700, pas un oubli.
 - **Le rejeu sur 401** et la révocation du jeton à l'extinction.
+
+## Sources auditées
+
+Listées pour que l'audit se relance au lieu de se refaire — c'est la même raison
+qui fait vivre `scripts/measure-output.mjs` dans le dépôt. Les citations du
+présent document viennent de ces pages, relues le 2026-08-24.
+
+| Source | Ce qui en a été retenu |
+|---|---|
+| [MCP — Authorization, 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) | La clause stdio, le rôle de client OAuth vers l'amont, HTTPS obligatoire, vol de jeton |
+| [MCP — Authorization, 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) | Les deux mêmes clauses, mot pour mot ; la forme `403` + `insufficient_scope` + `scope` |
+| [MCP — Security Best Practices](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices) | *Token passthrough*, minimisation des portées, exigence HTTPS hors boucle locale |
+| [RFC 9700 — OAuth 2.0 Security BCP](https://www.rfc-editor.org/rfc/rfc9700.html) | Le grant *password* « MUST NOT be used » ; asymétrique recommandé pour l'authentification cliente ; jamais de jeton en paramètre d'URL |
+| [RFC 6749 §4.4.3 et §5.2](https://datatracker.ietf.org/doc/html/rfc6749#section-4.4.3) | Pas de `refresh_token` en `client_credentials` ; les champs d'une réponse d'erreur |
+| [Claude Code — MCP](https://code.claude.com/docs/en/mcp) | L'expansion `${VAR}` dans `env`, la portée locale pour les identifiants, l'avertissement sur les fins de ligne collées |
 
 ## Interaction connue, acceptée
 
