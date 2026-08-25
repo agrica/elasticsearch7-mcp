@@ -7,6 +7,7 @@ import { searchLogs } from "../tools/ecs/searchLogs.js";
 import { logHistogram, type Breakdown } from "../tools/ecs/logHistogram.js";
 import { errorSummary } from "../tools/ecs/errorSummary.js";
 import { topValues } from "../tools/ecs/topValues.js";
+import { traceRequest } from "../tools/ecs/traceRequest.js";
 
 /**
  * The breakdowns `log_histogram` offers, spelled out rather than derived from
@@ -26,9 +27,9 @@ export type BreakdownChoicesAreComplete = Assert<
 >;
 
 /**
- * The filters all four tools share.
+ * The filters all five tools share.
  *
- * Declared once, because four copies of ten descriptions is where they start
+ * Declared once, because five copies of twelve descriptions is where they start
  * disagreeing — and these descriptions are the calling model's only
  * documentation. The wording spends its words on what a caller gets wrong
  * unprompted: that the keyword filters are exact, and that `since` takes a bare
@@ -49,6 +50,11 @@ const LOG_FILTERS = {
     .union([z.string(), z.array(z.string())])
     .optional()
     .describe("service.name, exactly as indexed. A misspelling returns nothing rather than an error — use top_values to see the real values."),
+
+  env: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe("service.environment. On a cluster holding several environments, omitting this silently sums them."),
 
   levels: z
     .array(z.string())
@@ -84,6 +90,11 @@ const LOG_FILTERS = {
     .string()
     .optional()
     .describe("trace.id — one distributed request."),
+
+  requestId: z
+    .string()
+    .optional()
+    .describe("http.request.id — what propagates when there is no trace.id."),
 } as const;
 
 /**
@@ -95,7 +106,7 @@ const LOG_FILTERS = {
  *
  * Read-only, so the flag is about surface rather than safety, as with the
  * diagnostics. What it buys is real: a cluster whose logs are not in ECS would
- * otherwise pay for four tool schemas that can only return nothing.
+ * otherwise pay for five tool schemas that can only return nothing.
  */
 export function registerEcsTools(
   server: McpServer,
@@ -170,6 +181,34 @@ export function registerEcsTools(
     },
     async ({ groups, ...filters }, extra) =>
       call(extra, (es) => errorSummary(es, indexPattern, { ...filters, groups }))
+  );
+
+  // Where it went wrong
+  server.registerTool(
+    "trace_request",
+    {
+      title: "Trace one request across services",
+      description:
+        "One request across every service that handled it, oldest first, with its chain of services and its failing events. Use it for where a failure came from, where the other tools say what is failing: they aggregate across requests and cannot attribute an error to a call further down. Matches trace.id or http.request.id, so the caller need not know which one this cluster populates.",
+      inputSchema: {
+        id: requiredText(
+          "The trace.id or http.request.id to follow.",
+          "A correlation identifier is required"
+        ),
+        ...LOG_FILTERS,
+        limit: z
+          .number()
+          .optional()
+          .describe("Timeline events, default 200, maximum 1000. The chain and the failing events stay complete regardless."),
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Also print error.stack_trace. Off by default, and then not requested."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id, limit, verbose, ...filters }, extra) =>
+      call(extra, (es) => traceRequest(es, indexPattern, id, { ...filters, limit, verbose }))
   );
 
   // Who, where, what

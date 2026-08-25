@@ -19,6 +19,7 @@ import { resolveBound } from "./timeRange.js";
  */
 export type LogFilters = {
   service?: string | string[];
+  env?: string | string[];
   levels?: string[];
   minLevel?: string;
   since?: string;
@@ -28,6 +29,7 @@ export type LogFilters = {
   logger?: string | string[];
   dataset?: string | string[];
   traceId?: string;
+  requestId?: string;
 };
 
 export type BuiltQuery =
@@ -103,12 +105,21 @@ export function buildLogQuery(filters: LogFilters): BuiltQuery {
     conditions.push({ terms: { [KEYWORD_FIELDS.level]: [...levels] } });
   }
 
+  // `env` sits next to `service` because it is the other half of naming one
+  // deployment. A cluster that collects several environments into one set of
+  // indices — a shared logging cluster, which is the common arrangement — answers
+  // "how many errors on this service" with the sum across all of them unless the
+  // environment is filtered. That sum is not a number anyone asked for, and
+  // nothing in the answer reveals that it is a sum, so the filter has to exist
+  // for the tool to be usable there at all.
   const keywordFilters: [string, string | string[] | undefined, string][] = [
     [KEYWORD_FIELDS.service, filters.service, "service"],
+    [KEYWORD_FIELDS.environment, filters.env, "env"],
     [KEYWORD_FIELDS.host, filters.host, "host"],
     [KEYWORD_FIELDS.logger, filters.logger, "logger"],
     [KEYWORD_FIELDS.dataset, filters.dataset, "dataset"],
     [KEYWORD_FIELDS.traceId, filters.traceId, "trace"],
+    [KEYWORD_FIELDS.requestId, filters.requestId, "request"],
   ];
 
   for (const [field, value, label] of keywordFilters) {

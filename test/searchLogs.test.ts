@@ -28,10 +28,12 @@ describe("searchLogs", () => {
 
     await searchLogs(client, PATTERN, {
       service: "billing",
+      env: "prod",
       levels: ["error"],
       since: "15m",
       host: ["srv-1", "srv-2"],
       traceId: "abc123",
+      requestId: "req-9",
     });
 
     // Nested under `body` — the 7.x shape. This is what the connection-level
@@ -44,6 +46,11 @@ describe("searchLogs", () => {
     expect(filters).toContainEqual({ terms: { "service.name": ["billing"] } });
     expect(filters).toContainEqual({ terms: { "host.name": ["srv-1", "srv-2"] } });
     expect(filters).toContainEqual({ terms: { "trace.id": ["abc123"] } });
+    expect(filters).toContainEqual({ terms: { "http.request.id": ["req-9"] } });
+    // Without this one, a cluster that collects several environments answers a
+    // per-service question with the sum across all of them, and says nothing
+    // about it being a sum.
+    expect(filters).toContainEqual({ terms: { "service.environment": ["prod"] } });
 
     const levelFilter = filters.find((entry: any) => entry.terms?.["log.level"]);
     expect(levelFilter.terms["log.level"]).toContain("ERROR");

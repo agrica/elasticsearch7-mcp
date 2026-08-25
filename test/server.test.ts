@@ -47,6 +47,7 @@ const ECS_TOOLS = [
   "log_histogram",
   "search_logs",
   "top_values",
+  "trace_request",
 ];
 
 const DESTRUCTIVE_TOOLS = [

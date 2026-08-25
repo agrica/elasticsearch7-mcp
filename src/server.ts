@@ -52,6 +52,7 @@ import { searchLogs } from "./tools/ecs/searchLogs.js";
 import { logHistogram } from "./tools/ecs/logHistogram.js";
 import { errorSummary } from "./tools/ecs/errorSummary.js";
 import { topValues } from "./tools/ecs/topValues.js";
+import { traceRequest } from "./tools/ecs/traceRequest.js";
 
 export {
   listIndices,
@@ -86,6 +87,7 @@ export {
   logHistogram,
   errorSummary,
   topValues,
+  traceRequest,
 };
 
 export {
