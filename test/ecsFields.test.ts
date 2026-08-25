@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CORRELATION_FIELDS,
   KEYWORD_FIELDS,
   RENDERED_FIELDS,
   STACK_TRACE,
@@ -88,7 +89,15 @@ describe("the field constants", () => {
       "error.type",
       "event.dataset",
       "trace.id",
+      "http.request.id",
     ]);
+  });
+
+  it("offers both correlation fields, ECS-canonical first", () => {
+    // A cluster with APM populates trace.id; a plain HTTP stack propagates only
+    // http.request.id. Checking one of them answers "no such trace" on the other
+    // kind of cluster, so trace_request matches either.
+    expect(CORRELATION_FIELDS).toEqual(["trace.id", "http.request.id"]);
   });
 
   it("keeps the stack trace out of the default field list", () => {

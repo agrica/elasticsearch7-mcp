@@ -81,7 +81,7 @@ for a single index gets a refusal instead of an emptied cluster.
 
 ### `ES_ECS_TOOLS=true` — ECS log search (read-only)
 
-Four tools for clusters whose application logs are in
+Five tools for clusters whose application logs are in
 [ECS](https://www.elastic.co/docs/reference/ecs/ecs-field-reference). They take
 named parameters instead of a query DSL and answer in log lines instead of JSON
 documents, because the schema is known in advance — which is also what lets them
@@ -92,10 +92,25 @@ start with the flag on and the pattern missing. A guess like `logs-*` would swee
 whichever indices happen to match on your cluster and answer confidently from the
 wrong data.
 
-* `search_logs`: recent events, newest first, one line each — filter by `service`, `levels`/`minLevel`, `host`, `logger`, `dataset`, `traceId` and free text, over a window given as `15m`, `2h`, `7d`
+* `search_logs`: recent events, newest first, one line each — filter by `service`, `env`, `levels`/`minLevel`, `host`, `logger`, `dataset`, `traceId`, `requestId` and free text, over a window given as `15m`, `2h`, `7d`
 * `log_histogram`: counts per time bucket, to see when something started, peaked or stopped. The bucket width is derived from the window, and empty buckets are kept because a gap is part of the answer
 * `error_summary`: errors grouped by `error.type`, with counts, first and last occurrence, affected services and a sample message
+* `trace_request`: one request across every service that handled it, oldest first, with the chain of services it travelled through and its failing events. Matches `trace.id` **or** `http.request.id`, so it works whether or not your stack emits distributed traces
 * `top_values`: the most frequent values of a field — what your cluster actually indexes, before you filter on a guess
+
+> [!TIP]
+> **`env` matters on a shared logging cluster.** Where several environments are
+> collected into one set of indices, omitting `env` sums them, and nothing in the
+> answer says that it is a sum. Measured on one such cluster: a service reporting
+> 390 errors over a day was 210 from integration, 179 from acceptance and 1 from
+> qualification. Run `top_values` on `service.environment` to see whether yours is
+> arranged that way.
+>
+> **`trace_request` is the "where did this come from" tool.** The other four
+> aggregate across requests, so none of them can attribute a failure to a call two
+> services further down. It reads oldest-first, because a chain is followed
+> forwards, and its chain and failing events come from aggregations — so they stay
+> complete even when the timeline is capped by `limit`.
 
 > [!NOTE]
 > **These target ECS 1.x field types, because that is what Elasticsearch 7.8 can
@@ -504,6 +519,8 @@ client owns its stdin and stdout.
 * "When did the 5xx spike start, and is it still going?"
 * "Which hosts are producing these timeouts?"
 * "What log levels does this cluster actually index?"
+* "Follow request aowQJmtrwvjJOWI3TyL_SAAAAA4 — which service did it fail in?"
+* "How many errors on the billing service in acceptance, not counting the other environments?"
 
 #### Destructive (needs `ES_ALLOW_DESTRUCTIVE=true`)
 * "Delete the 'smoke-test-source' index."
@@ -520,6 +537,7 @@ client owns its stdin and stdout.
 | `Error: … error="insufficient_scope", and asks for scope "…"` | The gateway wants a scope the token does not carry. Add it to `ES_OAUTH_SCOPE`. |
 | The client connects, but a diagnostic or delete tool is missing | That set is gated. Set `ES_ADMIN_TOOLS=true` or `ES_ALLOW_DESTRUCTIVE=true` and restart the client. |
 | `Server error: ... ES_ECS_INDEX_PATTERN is required` | `ES_ECS_TOOLS` is on with no pattern. There is deliberately no default — set it to the pattern holding your ECS logs. |
+| Every tool times out, and `ES_HOST` carries a path prefix such as `https://host/es/` | The client asks for the cluster root at the prefix **without** a trailing slash — `GET /es` — for its product check. A reverse proxy that only maps `/es/` answers that with a redirect, which the 7.x client does not follow. Map the prefix with and without the slash. |
 | `search_logs` returns nothing, with no error | A keyword filter did not match the indexed spelling. `service.name`, `log.level` and the rest are exact and case-sensitive; run `top_values` on the field to see the real values. |
 | `top_values` refuses a field as "analysed text" | Aggregations need a keyword. Try `<field>.keyword`, or ask `field_caps` which fields the pattern reports as aggregatable. |
 | `Refusing to act on the pattern "logs-*"` | Working as intended: destructive tools take one concrete index name, never a pattern, even with the flag on. |

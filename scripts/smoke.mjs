@@ -62,6 +62,7 @@ import {
   logHistogram,
   errorSummary,
   topValues,
+  traceRequest,
   deleteIndex,
   deleteDocument,
   deleteByQuery,
@@ -281,8 +282,14 @@ if (ecsPattern) {
   await check(`top_values (${ecsPattern}, log.level)`, () =>
     topValues(esClient, ecsPattern, "log.level", { since: "24h" })
   );
+  // A synthetic identifier on purpose: the check is that the tool answers, and an
+  // identifier that matches nothing is the branch a real cluster is most likely
+  // to take anyway. Matching one would need a trace to exist at smoke time.
+  await check(`trace_request (${ecsPattern})`, () =>
+    traceRequest(esClient, ecsPattern, "smoke-test-no-such-request", { since: "24h" })
+  );
 } else {
-  for (const tool of ["search_logs", "log_histogram", "error_summary", "top_values"]) {
+  for (const tool of ["search_logs", "log_histogram", "error_summary", "top_values", "trace_request"]) {
     skip(tool, "ES_ECS_INDEX_PATTERN is not set");
   }
 }

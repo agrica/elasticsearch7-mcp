@@ -141,10 +141,17 @@ ECS, behind `ES_ECS_TOOLS`. Four things about it are load-bearing:
   (1m over 30 days is 43 200) and one fragment per bucket made the result outgrow
   the budget by the count of its own fragments.
 
-Measured cost of the set: `tools/list` goes from 13 186 bytes (17 tools) to
-21 553 (21), so the flag buys back **8.4 KB** per session for a deployment whose
-logs are not in ECS. Most of that is structural - ten shared filters described
-once per tool - not prose.
+Measured cost of the set: `tools/list` goes from 13 176 bytes (17 tools) to
+25 416 (22), so the flag buys back **12.2 KB** per session for a deployment whose
+logs are not in ECS. Most of that is structural - twelve shared filters described
+once per tool - not prose. The set grew by 3 863 bytes when
+`trace_request` was added: 2 654 for the tool itself, and 1 209 for `env` and
+`requestId` joining the shared block — which is what a filter costs once five
+tools each describe it.
+
+`scripts/measure-output.mjs` does not cover this configuration, so the figure
+above was taken by hand from a `tools/list` with `ES_ECS_TOOLS` on. Worth adding
+there, since it is the one number the flag exists to justify.
 
 `field_caps` and `analyze` live in the **data** set rather than the diagnostic
 one: `get_mappings` is already there and `field_caps` answers the same question
