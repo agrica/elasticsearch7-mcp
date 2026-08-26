@@ -65,7 +65,7 @@ had before. Running the workflow manually (`workflow_dispatch`) rehearses everyt
 a dry run.
 
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
-`src/server.ts` (currently `0.3.0` in both — the release guard fails if they diverge),
+`src/server.ts` (currently `0.4.0` in both — the release guard fails if they diverge),
 commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
 publication; no extra secret is needed.
 
@@ -97,7 +97,7 @@ Three layers, deliberately thin:
 | `register/dataTools.ts` | always | the 17 read/write tools |
 | `register/adminTools.ts` | `ES_ADMIN_TOOLS` | 8 read-only diagnostic tools |
 | `register/destructiveTools.ts` | `ES_ALLOW_DESTRUCTIVE` | 4 irreversible tools |
-| `register/ecsTools.ts` | `ES_ECS_TOOLS` | 4 read-only ECS log tools |
+| `register/ecsTools.ts` | `ES_ECS_TOOLS` | 5 read-only ECS log tools |
 
 The gate is **registration, not a runtime check**: a tool that is never registered is absent from `tools/list`, so the model cannot call it and it costs nothing in the caller's context. Do not "simplify" this into a guard inside the handler — that would put every destructive tool's schema back into the context of every production agent.
 
