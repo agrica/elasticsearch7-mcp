@@ -37,6 +37,7 @@ const ADMIN_TOOLS = [
   "get_cluster_settings",
   "get_index_settings",
   "get_index_stats",
+  "get_node_stats",
   "list_nodes",
   "list_shards",
   "list_tasks",

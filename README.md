@@ -60,6 +60,7 @@ logging into the cluster.
 * `explain_allocation`: why a shard is unassigned, with each allocator's decision
 * `list_shards`: shard-level state, leading with the copies that are not `STARTED`
 * `list_nodes`: heap, CPU, load and disk pressure per node
+* `get_node_stats`: garbage collection, thread pool queues and rejections, tripped breakers — the counters `list_nodes` cannot show
 * `get_index_stats`: per-index counters — size, segments, indexing, search, merges
 * `get_index_settings`: an index's settings (`refresh_interval`, replicas, read-only blocks)
 * `get_cluster_settings`: cluster settings that were overridden at runtime
@@ -510,6 +511,7 @@ client owns its stdin and stdout.
 #### Diagnostics (needs `ES_ADMIN_TOOLS=true`)
 * "The 'logs-2026' index is yellow — why are its shards unassigned?"
 * "Is any node close to a disk watermark?"
+* "Is the cluster rejecting writes, or spending its time in garbage collection?"
 * "Which of my indices is the largest, and how much of it is deleted documents?"
 * "Has anyone disabled shard allocation on this cluster?"
 * "Is a reindex still running?"

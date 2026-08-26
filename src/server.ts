@@ -30,6 +30,7 @@ import { getTask, listTasks } from "./tools/tasks.js";
 import {
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
 } from "./tools/diagnostics.js";
@@ -70,6 +71,7 @@ export {
   listTasks,
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
   getClusterInfo,
@@ -134,7 +136,7 @@ export async function createElasticsearchMcpServer(
   // without reading the env of each entry.
   const server = new McpServer({
     name: "mcp-server-elasticsearch7",
-    version: "0.3.0",
+    version: "0.4.0",
     title: validated.instanceLabel
       ? `Elasticsearch 7.x — ${validated.instanceLabel}`
       : "Elasticsearch 7.x",

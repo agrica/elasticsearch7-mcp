@@ -53,6 +53,7 @@ import {
   getClusterSettings,
   getIndexSettings,
   getIndexStats,
+  getNodeStats,
   listShards,
   listNodes,
   explainAllocation,
@@ -299,6 +300,7 @@ await check("get_aliases", () => getAliases(esClient));
 await check("get_cluster_settings", () => getClusterSettings(esClient));
 await check("list_shards", () => listShards(esClient));
 await check("list_nodes", () => listNodes(esClient));
+await check("get_node_stats", () => getNodeStats(esClient));
 await check("list_tasks", () => listTasks(esClient));
 
 // allocation/explain answers 400 on a healthy cluster ("unable to find any

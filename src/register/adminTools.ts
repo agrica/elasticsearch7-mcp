@@ -7,6 +7,7 @@ import { GET_INDEX_SETTINGS_OUTPUT, LIST_SHARDS_OUTPUT } from "./outputSchemas.j
 import {
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
 } from "../tools/diagnostics.js";
@@ -107,6 +108,23 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (_args, extra) => call(extra, (es) => listNodes(es))
+  );
+
+  // The counters _cat/nodes cannot show
+  server.registerTool(
+    "get_node_stats",
+    {
+      title: "Node JVM, thread pool and breaker stats",
+      description: "Garbage collection, thread pool queues and rejections, and tripped circuit breakers, per node. A rejection is where an ingest silently loses documents. Counters are cumulative since each node started, so read them against the uptime reported beside them.",
+      inputSchema: {
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Also dump every thread pool and breaker per node, idle ones included. The summary lists only those with queued, rejected or active work."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ verbose }, extra) => call(extra, (es) => getNodeStats(es, verbose))
   );
 
   // Index settings

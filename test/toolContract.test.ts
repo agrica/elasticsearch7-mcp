@@ -16,6 +16,7 @@ import { getTask, listTasks } from "../src/tools/tasks.js";
 import {
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
 } from "../src/tools/diagnostics.js";
@@ -83,6 +84,7 @@ const TOOLS: [name: string, invoke: (client: Client) => Promise<ToolResult>][] =
   ["list_shards", (c) => listShards(c)],
   ["get_index_stats", (c) => getIndexStats(c, "logs")],
   ["list_nodes", (c) => listNodes(c)],
+  ["get_node_stats", (c) => getNodeStats(c)],
   ["get_index_settings", (c) => getIndexSettings(c, "logs")],
   ["get_cluster_settings", (c) => getClusterSettings(c)],
   // cluster_info is absent on purpose: it calls `GET /`, the one route

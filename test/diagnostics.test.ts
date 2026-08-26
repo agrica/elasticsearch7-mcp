@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
 } from "../src/tools/diagnostics.js";
@@ -14,7 +15,9 @@ import { listTasks } from "../src/tools/tasks.js";
 import {
   capture,
   createMockedClient,
+  failEveryRoute,
   firstRequest,
+  isFailure,
   textOf,
 } from "./support/mockClient.js";
 
@@ -307,5 +310,182 @@ describe("list_tasks", () => {
     expect(firstRequest(call).querystring.detailed).toBe("true");
     expect(text).toContain("node1:42");
     expect(text).toContain("indices:data/write/reindex");
+  });
+});
+
+/**
+ * Node stats answer the three questions `_cat/nodes` cannot: is the JVM
+ * spending its time collecting garbage, is work queueing or being rejected, and
+ * has a circuit breaker fired. All three are counters cumulative since the node
+ * started, which is the trap this tool exists to avoid walking into: a number
+ * with no uptime beside it reads as "right now" to a calling model.
+ */
+const NODE_STATS_FIXTURE = {
+  _nodes: { total: 2, successful: 2, failed: 0 },
+  cluster_name: "logging-cluster",
+  nodes: {
+    aaaaaaaaaaaaaaaaaaaaaa: {
+      name: "es-node-1",
+      jvm: {
+        uptime_in_millis: 3_542_400_000,
+        mem: {
+          heap_used_in_bytes: 25_891_534_848,
+          heap_used_percent: 78,
+          heap_max_in_bytes: 33_285_996_544,
+        },
+        gc: {
+          collectors: {
+            young: { collection_count: 118_432, collection_time_in_millis: 1_260_000 },
+            old: { collection_count: 2431, collection_time_in_millis: 94_000 },
+          },
+        },
+      },
+      thread_pool: {
+        write: { active: 4, queue: 12, rejected: 128, completed: 900, threads: 8 },
+        search: { active: 0, queue: 0, rejected: 0, completed: 500, threads: 13 },
+        force_merge: { active: 0, queue: 0, rejected: 0, completed: 3, threads: 1 },
+      },
+      breakers: {
+        parent: { tripped: 3, limit_size_in_bytes: 31_621_696_716 },
+        fielddata: { tripped: 0, limit_size_in_bytes: 13_314_398_617 },
+      },
+    },
+    bbbbbbbbbbbbbbbbbbbbbb: {
+      name: "es-node-2",
+      jvm: {
+        uptime_in_millis: 3_542_400_000,
+        mem: {
+          heap_used_in_bytes: 13_314_398_617,
+          heap_used_percent: 41,
+          heap_max_in_bytes: 33_285_996_544,
+        },
+        gc: {
+          collectors: {
+            young: { collection_count: 90_210, collection_time_in_millis: 1_020_000 },
+            old: { collection_count: 812, collection_time_in_millis: 31_000 },
+          },
+        },
+      },
+      thread_pool: {
+        write: { active: 0, queue: 0, rejected: 0, completed: 640, threads: 8 },
+        search: { active: 0, queue: 0, rejected: 0, completed: 480, threads: 13 },
+      },
+      breakers: {
+        parent: { tripped: 0, limit_size_in_bytes: 31_621_696_716 },
+        fielddata: { tripped: 0, limit_size_in_bytes: 13_314_398_617 },
+      },
+    },
+  },
+};
+
+describe("get_node_stats", () => {
+  it("asks for jvm, thread_pool and breaker only", async () => {
+    const { client, mock } = createMockedClient();
+    const call = capture(
+      mock,
+      { method: "GET", path: "/_nodes/stats/*" },
+      NODE_STATS_FIXTURE
+    );
+
+    await getNodeStats(client);
+
+    // The path carries the metric filter, and the filter is the whole reason
+    // this is one cheap call: a bare `_nodes/stats` also returns `indices`,
+    // which is the bulk of the payload and answers none of these questions.
+    const path = decodeURIComponent(firstRequest(call).path);
+    expect(path).toContain("jvm");
+    expect(path).toContain("thread_pool");
+    expect(path).toContain("breaker");
+    expect(path).not.toContain("indices");
+  });
+
+  it("gives every node a heap and GC line, quiet ones included", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client));
+
+    // Nodes are the bounded dimension — tens, not thousands — so none is ever
+    // filtered out. A node missing from the answer would read as a node that is
+    // fine, which is the failure mode this whole file is written against.
+    expect(text).toContain("es-node-1");
+    expect(text).toContain("es-node-2");
+    expect(text).toContain("heap 78%");
+    expect(text).toContain("heap 41%");
+    expect(text).toContain("old 812");
+  });
+
+  it("names the counters cumulative and gives each node's uptime", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client));
+
+    // 3 542 400 000 ms is 41 days. Without it beside them, 128 rejections read
+    // as "the cluster is rejecting writes" rather than "it did, at some point
+    // in the last six weeks".
+    expect(text).toContain("41d");
+    expect(text).toContain("cumulative");
+  });
+
+  it("shows a thread pool with rejections and hides the idle ones", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client));
+
+    expect(text).toContain("write: active 4, queue 12, rejected 128");
+    // Pools are the unbounded dimension: around twenty per node. Selecting them
+    // by "not idle" rather than by a name list is what keeps a saturated
+    // force_merge visible without anyone having to add it to a whitelist.
+    expect(text).not.toContain("force_merge");
+    expect(text).not.toContain("search:");
+  });
+
+  it("shows a tripped breaker and hides the ones that never fired", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client));
+
+    expect(text).toContain("breaker parent: tripped 3");
+    expect(text).not.toContain("fielddata");
+  });
+
+  it("counts the nodes under pressure so an absence is a number", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client));
+
+    // "2 nodes" alone would leave a caller unable to tell a quiet cluster from
+    // a tool that dropped the interesting half.
+    expect(text).toContain("2 nodes");
+    expect(text).toContain("1 with queued or rejected work");
+    expect(text).toContain("1 with a tripped breaker");
+  });
+
+  it("dumps the full per-node stats behind verbose", async () => {
+    const { client, mock } = createMockedClient();
+    capture(mock, { method: "GET", path: "/_nodes/stats/*" }, NODE_STATS_FIXTURE);
+
+    const text = textOf(await getNodeStats(client, true));
+
+    // force_merge is idle, so the summary omits it. Verbose means "give me the
+    // rows", including the idle ones a caller may want to rule out.
+    expect(text).toContain("force_merge");
+    expect(text).toContain("completed");
+  });
+
+  it("reports a cluster error as a failed result, not a throw", async () => {
+    const { client, mock } = createMockedClient();
+    failEveryRoute(mock);
+
+    const result = await getNodeStats(client);
+
+    // The context string goes to stderr only: an ES client error carries the
+    // connection in `meta`, and a node URL may embed credentials.
+    expect(isFailure(result)).toBe(true);
+    expect(textOf(result)).toContain("Error:");
   });
 });
