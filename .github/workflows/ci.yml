@@ -56,6 +56,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Replaces the SecretsUsedInArgOrEnv check the Dockerfile skips. That rule
+      # judges a variable by its name, so it flags five declarations that are
+      # empty on purpose; this one judges by the value, and so catches the thing
+      # the rule exists for — a credential typed into a layer — without the five
+      # false positives. Any credential-shaped ENV or ARG that is not exactly
+      # `=""` fails here.
+      - name: Check no credential-shaped ENV carries a value
+        run: |
+          offenders=$(grep -nE '^(ENV|ARG) +[A-Z_]*(KEY|SECRET|PASSWORD|TOKEN|AUTH|CERT)[A-Z_]*=' Dockerfile | grep -v '=""$' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::a credential-shaped ENV/ARG in the Dockerfile carries a value; it would be baked into every layer of the published image"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "OK: every credential-shaped ENV is declared empty."
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Build the image
