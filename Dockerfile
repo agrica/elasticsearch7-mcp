@@ -1,4 +1,25 @@
 # syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+
+# The skip above must sit in the directive block, adjacent to `syntax` and
+# before any comment or blank line — a parser directive that follows one is
+# silently ignored, which would look like the rule simply passing.
+#
+# SecretsUsedInArgOrEnv fires on the *name* of a variable, so it flags
+# ES_API_KEY, ES_PASSWORD, ES_OAUTH_CLIENT_SECRET, ES_OAUTH_TOKEN_URL and
+# ES_OAUTH_AUTH_STYLE below. Nothing is baked in: every one of them is declared
+# empty, and the loader treats an empty value as unset throughout
+# (src/config/schema.ts — `readOAuthFromEnv` requires a non-empty trimmed value
+# before it builds the OAuth2 block at all, which is why an image declaring
+# these still starts with no OAuth2 factor).
+#
+# They are declared rather than merely documented so that `docker inspect` and
+# `--env-file` show an operator the whole surface the image accepts.
+#
+# The skip is repository-wide, which would also hide a real secret typed in here
+# later — so CI replaces it with a stricter rule that reads the value instead of
+# the name. See "Check no credential-shaped ENV carries a value" in
+# .github/workflows/ci.yml.
 
 # Multi-stage: the build stage needs typescript and shx, the runtime image must
 # not carry them. Base pinned to the major in .nvmrc rather than the floating
