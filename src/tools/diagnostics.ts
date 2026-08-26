@@ -235,3 +235,113 @@ export async function listNodes(esClient: Client): Promise<ToolResult> {
     return toolError("List nodes failed", error);
   }
 }
+
+/** Days below a day are zero, and hours above one are noise. */
+function formatUptime(millis: number | undefined): string {
+  if (millis === undefined) return "uptime ?";
+  const hours = millis / 3_600_000;
+  return hours >= 24 ? `uptime ${Math.floor(hours / 24)}d` : `uptime ${Math.floor(hours)}h`;
+}
+
+function gigabytes(value: number | undefined): string {
+  return value === undefined ? "?" : `${(value / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function seconds(millis: number | undefined): string {
+  return millis === undefined ? "?" : `${Math.round(millis / 1000)}s`;
+}
+
+/**
+ * The three counters `_cat/nodes` cannot show: garbage collection, thread pool
+ * queues and rejections, and tripped circuit breakers. One call, filtered to
+ * three metrics — a bare `_nodes/stats` also returns `indices`, which is most of
+ * the payload and answers none of these questions.
+ *
+ * Every counter here is cumulative since the node started, so the uptime is
+ * printed beside them and the summary says so. A rejection count with nothing to
+ * scale it against reads as "now" to a calling model, and "the cluster is
+ * rejecting writes" is a very different answer from "it did, once, five weeks
+ * ago".
+ *
+ * The filtering is asymmetric on purpose. Nodes are never dropped: they number
+ * in the tens, and a node missing from the answer reads as a node that is fine.
+ * Thread pools and breakers are dropped when idle: there are around twenty pools
+ * per node, which is the dimension that would swamp the result.
+ */
+export async function getNodeStats(
+  esClient: Client,
+  verbose?: boolean
+): Promise<ToolResult> {
+  try {
+    const response = await esClient.nodes.stats<estypes.NodesStatsResponse>({
+      metric: "jvm,thread_pool,breaker",
+    });
+
+    const nodes = Object.values(response.body.nodes ?? {});
+    const blocks: string[] = [];
+    let busy = 0;
+    let tripped = 0;
+
+    for (const node of nodes) {
+      const lines = [`${node.name ?? "?"} — ${formatUptime(node.jvm?.uptime_in_millis)}`];
+
+      const mem = node.jvm?.mem;
+      lines.push(
+        `  heap ${mem?.heap_used_percent ?? "?"}% ` +
+          `(${gigabytes(mem?.heap_used_in_bytes)} of ${gigabytes(mem?.heap_max_in_bytes)})`
+      );
+
+      // The collectors are iterated rather than named: "young" and "old" are
+      // what a 7.x node running CMS or G1 reports today, but the names come
+      // from the JVM, not from Elasticsearch.
+      const collectors = Object.entries(node.jvm?.gc?.collectors ?? {});
+      if (collectors.length > 0) {
+        lines.push(
+          `  GC ${collectors
+            .map(([name, gc]) => `${name} ${gc.collection_count ?? "?"}/${seconds(gc.collection_time_in_millis)}`)
+            .join(", ")}`
+        );
+      }
+
+      // Selected by activity, not by a list of pool names. A whitelist of
+      // write/search/bulk would leave a saturated force_merge or snapshot pool
+      // invisible, and an unasked question does not fail — it returns nothing,
+      // which a caller reads as "there is nothing".
+      const pools = Object.entries(node.thread_pool ?? {}).filter(
+        ([, pool]) =>
+          (pool.queue ?? 0) > 0 || (pool.rejected ?? 0) > 0 || (pool.active ?? 0) > 0
+      );
+      if (pools.length > 0) busy += 1;
+      for (const [name, pool] of pools) {
+        lines.push(
+          `  ${name}: active ${pool.active ?? 0}, queue ${pool.queue ?? 0}, rejected ${pool.rejected ?? 0}`
+        );
+      }
+
+      const breakers = Object.entries(node.breakers ?? {}).filter(
+        ([, breaker]) => (breaker.tripped ?? 0) > 0
+      );
+      if (breakers.length > 0) tripped += 1;
+      for (const [name, breaker] of breakers) {
+        lines.push(`  breaker ${name}: tripped ${breaker.tripped}`);
+      }
+
+      blocks.push(lines.join("\n"));
+    }
+
+    return budgeted({
+      summary: [
+        textFragment(
+          `${nodes.length} nodes; ${busy} with queued or rejected work, ` +
+            `${tripped} with a tripped breaker.\n` +
+            `Counters are cumulative since each node's start — read them against the uptime on its line.`
+        ),
+        textFragment(blocks.join("\n")),
+      ],
+      detail: verbose ? chunkedJson(nodes) : [],
+      hint: "Pass verbose for every thread pool and breaker, idle ones included.",
+    });
+  } catch (error) {
+    return toolError("Get node stats failed", error);
+  }
+}

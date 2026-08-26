@@ -30,6 +30,7 @@ import { getTask, listTasks } from "./tools/tasks.js";
 import {
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
 } from "./tools/diagnostics.js";
@@ -70,6 +71,7 @@ export {
   listTasks,
   explainAllocation,
   getIndexStats,
+  getNodeStats,
   listNodes,
   listShards,
   getClusterInfo,

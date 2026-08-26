@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 320 tests, mocked at the client connection layer
+pnpm test             # vitest run — 344 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -95,7 +95,7 @@ Three layers, deliberately thin:
 | Module | Flag | Contents |
 |---|---|---|
 | `register/dataTools.ts` | always | the 17 read/write tools |
-| `register/adminTools.ts` | `ES_ADMIN_TOOLS` | 7 read-only diagnostic tools |
+| `register/adminTools.ts` | `ES_ADMIN_TOOLS` | 8 read-only diagnostic tools |
 | `register/destructiveTools.ts` | `ES_ALLOW_DESTRUCTIVE` | 4 irreversible tools |
 | `register/ecsTools.ts` | `ES_ECS_TOOLS` | 4 read-only ECS log tools |
 
@@ -180,7 +180,7 @@ Audited against the 2025-06-18 specification, and re-checked against 2025-11-25 
 
 Worth knowing before anyone reaches for the MCP authorization specification: it does not apply here, by its own terms. "Implementations using an STDIO transport **SHOULD NOT** follow this specification, and instead retrieve credentials from the environment." Its OAuth apparatus governs the *client → server* axis over HTTP; `ES_OAUTH_*` is the other axis, server → upstream API, which the same page provides for explicitly ("it may act as an OAuth client to them... a separate token"). The accompanying MUST NOT — never pass the client's token through — holds by construction here, and must keep holding: forwarding a caller-supplied token would be the token passthrough anti-pattern.
 
-- **`isError: true` on every failure.** The specification separates protocol errors (JSON-RPC) from *tool execution* errors, which are results carrying `isError`. `toolError()` and `toolRefusal()` both set it; success omits it, since the protocol defaults it to false. A guardrail refusal counts as a failure — reporting it as a success would let a model conclude a delete had happened. `test/toolContract.test.ts` asserts the flag for all 26 tools; removing it from `toolResult.ts` fails 27 tests.
+- **`isError: true` on every failure.** The specification separates protocol errors (JSON-RPC) from *tool execution* errors, which are results carrying `isError`. `toolError()` and `toolRefusal()` both set it; success omits it, since the protocol defaults it to false. A guardrail refusal counts as a failure — reporting it as a success would let a model conclude a delete had happened. `test/toolContract.test.ts` asserts the flag for all 33 tools; removing it from `toolResult.ts` fails 52 tests across ten files.
 - **Every tool carries `annotations` and a `title`, via `registerTool`.** `server.tool()` is deprecated in SDK 1.30 and cannot pass either. The hints are what a client reads to decide whether to ask the user first, so they are the client-side counterpart of the registration gating — not a replacement for it, since the specification tells clients to distrust annotations from an untrusted server. `idempotentHint` is claimed only where repeating the identical call really leaves the same state: `create_index` fails when the index exists, `delete_index` 404s once it is gone, and `bulk` without an id field creates new documents each time — all four are annotated `false`, and a test enforces that.
 - **Cancellation is bound to the client, not threaded through the tools.** See `src/cancellable.ts`. `withCancellation(esClient, extra.signal)` returns a Proxy whose requests abort when the client cancels; the register modules are the only place that applies it. The alternative — a trailing `signal` parameter on all 26 tool functions — would have changed every public signature that `src/server.ts` re-exports, to say one thing about the client rather than about the arguments.
 - **Structured output on four tools, and only four.** `list_indices`, `list_shards`, `get_index_settings` and `get_mappings` declare an `outputSchema` (`src/register/outputSchemas.ts`) and return `structuredContent`. The pair is not optional: the SDK rejects a *successful* result that omits the payload once a schema is declared — `validateToolOutput` in `server/mcp.js`, which skips the check when `isError` is set, so the failure paths are exempt but the friendly not-found branches are not. `test/outputSchemas.test.ts` parses each tool's real payload with its declared schema, because a mismatch surfaces as a protocol error rather than a tool result. Four rather than twenty-six, because a schema is paid for in every session's `tools/list` and earns it only where a caller would otherwise parse prose: `search` hits are documents of arbitrary shape, `reindex` returns a task id, and a schema saying `object` costs bytes to say nothing.
