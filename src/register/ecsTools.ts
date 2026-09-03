@@ -133,7 +133,7 @@ export function registerEcsTools(
           .optional()
           .describe("Also print error.stack_trace. Off by default, and then the field is not even requested — it is the largest in the document."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ limit, verbose, ...filters }, extra) =>
       call(extra, (es) => searchLogs(es, indexPattern, { ...filters, limit, verbose }))
@@ -157,7 +157,7 @@ export function registerEcsTools(
           .optional()
           .describe("Break each bucket down by this field, keeping its top 5 values."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ interval, by, ...filters }, extra) =>
       call(extra, (es) => logHistogram(es, indexPattern, { ...filters, interval, by }))
@@ -177,7 +177,7 @@ export function registerEcsTools(
           .optional()
           .describe("Distinct error types to report, default 10, maximum 50."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ groups, ...filters }, extra) =>
       call(extra, (es) => errorSummary(es, indexPattern, { ...filters, groups }))
@@ -205,7 +205,7 @@ export function registerEcsTools(
           .optional()
           .describe("Also print error.stack_trace. Off by default, and then not requested."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ id, limit, verbose, ...filters }, extra) =>
       call(extra, (es) => traceRequest(es, indexPattern, id, { ...filters, limit, verbose }))
@@ -229,7 +229,7 @@ export function registerEcsTools(
           .optional()
           .describe("Distinct values to return, default 10, maximum 100."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ field, size, ...filters }, extra) =>
       call(extra, (es) => topValues(es, indexPattern, field, { ...filters, size }))

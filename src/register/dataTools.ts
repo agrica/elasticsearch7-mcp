@@ -54,7 +54,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .describe("Also repeat the rows as JSON text, for a client that does not read structured output."),
       },
       outputSchema: LIST_INDICES_OUTPUT,
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ pattern, verbose }, extra) => call(extra, (es) => listIndices(es, pattern, verbose))
   );
@@ -69,7 +69,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
         index: indexName("Index name"),
       },
       outputSchema: GET_MAPPINGS_OUTPUT,
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => call(extra, (es) => getMappings(es, index))
   );
@@ -88,7 +88,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .optional()
           .describe("Field name or wildcard to ask about, e.g. log.* — comma-separated for several. Defaults to every field."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, fields }, extra) => call(extra, (es) => fieldCaps(es, index, fields))
   );
@@ -117,7 +117,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .optional()
           .describe("Named analyzer to test instead, e.g. standard, french."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ text, index, field, analyzer }, extra) =>
       call(extra, (es) => analyze(es, text, { index, field, analyzer }))
@@ -151,7 +151,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
             "Query DSL body: query, size, from, sort, aggs, _source."
           ),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, queryBody }, extra) => call(extra, (es) => search(es, index, queryBody))
   );
@@ -169,7 +169,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .default(false)
           .describe("Add per-index health detail"),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ includeIndices }, extra) => call(extra, (es) => getClusterHealth(es, includeIndices))
   );
@@ -334,7 +334,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .optional()
           .describe("Template name. Omit to list every template.")
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ name }, extra) => call(extra, (es) => getIndexTemplate(es, name))
   );
@@ -353,7 +353,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .optional()
           .describe("Query DSL. Omit to count every document."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, query }, extra) => call(extra, (es) => count(es, index, query))
   );
@@ -369,7 +369,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
 
         id: requiredText("Document _id", "Document id is required"),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, id }, extra) => call(extra, (es) => getDocument(es, index, id))
   );
@@ -386,7 +386,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
           .optional()
           .describe("Index or wildcard. Omit for the whole cluster."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => call(extra, (es) => getAliases(es, index))
   );
@@ -400,7 +400,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
       inputSchema: {
         taskId: requiredText("Task id as returned by reindex, e.g. node-1:428", "Task id is required"),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ taskId }, extra) => call(extra, (es) => getTask(es, taskId))
   );
@@ -412,7 +412,7 @@ export function registerDataTools(server: McpServer, source: ClientSource): void
       title: "Cluster version and identity",
       description: "Cluster name, Elasticsearch version and build flavour. The version decides which query DSL features exist.",
       inputSchema: {},
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (_args, extra) => call(extra, (es) => getClusterInfo(es))
   );

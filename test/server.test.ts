@@ -263,6 +263,36 @@ describe("MCP server registration", () => {
     await client.close();
   });
 
+  it("declares all four behaviour hints as explicit booleans on every tool", async () => {
+    // The specification lets a read-only tool omit destructiveHint: the hint
+    // only has meaning once readOnlyHint is false. Directories do not — OpenAI's
+    // rejects a tool where any of the four is missing or non-boolean, and an
+    // external audit marked 25 of these 34 tools down for exactly that. The
+    // omission is invisible until a directory refuses the server, so it is
+    // asserted here rather than left to review.
+    const { client } = await connectedClient({
+      adminTools: true,
+      allowDestructive: true,
+      ecsTools: true,
+      ecsIndexPattern: "logs-app-*",
+    });
+    const { tools } = await client.listTools();
+
+    expect(tools).toHaveLength(
+      DATA_TOOLS.length + ADMIN_TOOLS.length + ECS_TOOLS.length + DESTRUCTIVE_TOOLS.length
+    );
+    const HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
+    for (const tool of tools) {
+      for (const hint of HINTS) {
+        expect(
+          typeof tool.annotations?.[hint],
+          `${tool.name} must declare ${hint} as a boolean`
+        ).toBe("boolean");
+      }
+    }
+    await client.close();
+  });
+
   it("annotates the whole diagnostic set as read-only, which is its premise", async () => {
     // ES_ADMIN_TOOLS is documented as safe to enable in production *because*
     // these only read. That claim was prose; this makes it checkable, so a

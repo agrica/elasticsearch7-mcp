@@ -136,7 +136,7 @@ export async function createElasticsearchMcpServer(
   // without reading the env of each entry.
   const server = new McpServer({
     name: "mcp-server-elasticsearch7",
-    version: "0.4.0",
+    version: "0.4.1",
     title: validated.instanceLabel
       ? `Elasticsearch 7.x — ${validated.instanceLabel}`
       : "Elasticsearch 7.x",

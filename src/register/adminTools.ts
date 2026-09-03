@@ -56,7 +56,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
           .optional()
           .describe("Explain the primary (default) or a replica. Requires index."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, shard, primary }, extra) => call(extra, (es) => explainAllocation(es, index, shard, primary))
   );
@@ -79,7 +79,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
           .describe("Also repeat every shard as JSON text, for a client that does not read structured output. On a large cluster this is thousands of entries — pass an index with it."),
       },
       outputSchema: LIST_SHARDS_OUTPUT,
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index, verbose }, extra) => call(extra, (es) => listShards(es, index, verbose))
   );
@@ -93,7 +93,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
       inputSchema: {
         index: indexName("Concrete index name"),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => call(extra, (es) => getIndexStats(es, index))
   );
@@ -105,7 +105,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
       title: "List nodes",
       description: "Node capacity: heap, RAM, CPU, load and disk. Disk pressure is the usual cause of unassigned shards and of an index turning read-only.",
       inputSchema: {},
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (_args, extra) => call(extra, (es) => listNodes(es))
   );
@@ -122,7 +122,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
           .optional()
           .describe("Also dump every thread pool and breaker per node, idle ones included. The summary lists only those with queued, rejected or active work."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ verbose }, extra) => call(extra, (es) => getNodeStats(es, verbose))
   );
@@ -137,7 +137,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
         index: indexName("Concrete index name"),
       },
       outputSchema: GET_INDEX_SETTINGS_OUTPUT,
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ index }, extra) => call(extra, (es) => getIndexSettings(es, index))
   );
@@ -149,7 +149,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
       title: "Get cluster settings",
       description: "Cluster settings overridden at runtime, such as disabled allocation or a lowered disk watermark. Defaults are omitted.",
       inputSchema: {},
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (_args, extra) => call(extra, (es) => getClusterSettings(es))
   );
@@ -166,7 +166,7 @@ export function registerAdminTools(server: McpServer, source: ClientSource): voi
           .optional()
           .describe("Action pattern, e.g. `*reindex*`. Omit for every task."),
       },
-      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ actions }, extra) => call(extra, (es) => listTasks(es, actions))
   );

@@ -14,7 +14,7 @@ MCP (Model Context Protocol) server that exposes an Elasticsearch cluster as too
 nvm use               # Node 24.19.0 (.nvmrc) — the active LTS, which @types/node tracks
 pnpm install          # pnpm ONLY — see the lockfile note below
 pnpm run build        # tsc + chmod +x dist/*.js
-pnpm test             # vitest run — 344 tests, mocked at the client connection layer
+pnpm test             # vitest run — 345 tests, mocked at the client connection layer
 pnpm run test:watch   # vitest in watch mode
 pnpm run typecheck    # tsc --strict over src, test and root files (vitest does NOT type-check)
 pnpm run watch        # tsc --watch
@@ -65,7 +65,7 @@ had before. Running the workflow manually (`workflow_dispatch`) rehearses everyt
 a dry run.
 
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
-`src/server.ts` (currently `0.4.0` in both — the release guard fails if they diverge),
+`src/server.ts` (currently `0.4.1` in both — the release guard fails if they diverge),
 commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
 publication; no extra secret is needed.
 
