@@ -55,9 +55,14 @@ not to npmjs.com. Two consequences that bite:
 handshake into it.
 
 `.github/workflows/release.yml` triggers on a `v*` tag push and does the release:
-three guards, then publish, then a GitHub Release whose notes GitHub generates from
-the commits and pull requests since the previous tag. **There is no `CHANGELOG.md`**
-— release notes come from commit messages, so write them as the changelog. The guards
+three guards, then publish, then a GitHub Release. **There is no `CHANGELOG.md`** —
+the release notes are built from `git log` between the previous tag and this one, one
+`###` section per non-merge commit, so **the commit messages are the release notes**:
+write them as the changelog. `--generate-notes` is deliberately not used — it lists
+pull requests, and this repository merges branches directly, so it opened both v0.4.0
+and v0.4.1 with nothing but a compare link. That step is also why the publish job
+checks out with `fetch-depth: 0`: the default shallow clone has neither the history
+nor the tags, and would quietly produce notes covering a single commit. The guards
 refuse to publish when the package scope does not match the repository owner, when the
 tag disagrees with `package.json`, or when the hardcoded `McpServer` version in
 `src/server.ts` disagrees with `package.json` — that last one is the drift this repo has
