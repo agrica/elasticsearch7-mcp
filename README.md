@@ -1,5 +1,6 @@
 # Elasticsearch 7.x MCP Server
 [![M8ven Score](https://m8ven.ai/badge/mcp/agrica-elasticsearch7-mcp-1yus5i)](https://m8ven.ai/mcp/agrica-elasticsearch7-mcp-1yus5i)
+[![M8ven Live Monitored](https://m8ven.ai/badge/mcp/agrica-elasticsearch7-mcp-1yus5i)](https://m8ven.ai/mcp/agrica-elasticsearch7-mcp-1yus5i)
 
 MCP Server for connecting to your Elasticsearch cluster directly from any MCP Client (like Claude Desktop, Cursor).
 
