@@ -1,0 +1,45 @@
+# Weekly dependency update pull requests. They run ci.yml like any other pull
+# request — typecheck, build, tests, pack and the Docker handshake — and nothing
+# else: no secret is involved, and nothing is published until a tag is pushed.
+version: 2
+updates:
+  # The npm ecosystem reads pnpm-lock.yaml, so the lockfile stays the one pnpm
+  # writes; there is no separate "pnpm" ecosystem.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+      prefix-development: deps-dev
+    ignore:
+      # 8.x and later break every 7.x cluster (product check, compatible-with=8
+      # media types) — see "Elasticsearch version: 7.x, deliberately" in
+      # CLAUDE.md. Minor and patch updates of the 7.17 line still arrive.
+      - dependency-name: '@elastic/elasticsearch'
+        update-types: ['version-update:semver-major']
+      # @types/node tracks the Node major in .nvmrc and the Dockerfile; it moves
+      # with them, not ahead of them.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    groups:
+      # Tooling updates arrive together; runtime dependencies stay in separate
+      # pull requests, so each one is reviewed on its own.
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns: ['*']
+

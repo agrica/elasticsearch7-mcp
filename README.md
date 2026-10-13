@@ -482,6 +482,22 @@ published port. In an MCP client:
 The image needs no port published and no volume: it speaks stdio, and the MCP
 client owns its stdin and stdout.
 
+## Installing from a release archive
+
+Each [GitHub Release](https://github.com/agrica/elasticsearch7-mcp/releases) also
+carries the package tarball and a `SHA256SUMS.txt`. Release assets download
+without a token, so this is the route for a machine that cannot authenticate to
+GitHub Packages. Its dependencies come from npmjs.com, as usual.
+
+```bash
+gh release download vX.Y.Z -R agrica/elasticsearch7-mcp -p '*.tgz' -p SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+npm install -g ./agrica-elasticsearch7-mcp-X.Y.Z.tgz
+```
+
+That puts `elasticsearch7-mcp` on the `PATH`: use it as the `command` in your
+client, in place of `npx`.
+
 ## Example Queries
 
 > [!TIP]

@@ -82,6 +82,17 @@ jobs:
       # A failing suite must stop a release, not be discovered after publishing.
       - run: pnpm test
 
+      # The same tarball the registry receives, attached to the GitHub Release
+      # with its checksum. Release assets of a public repository download without
+      # a token, unlike GitHub Packages, so this is the install path for a machine
+      # that has no read:packages token. No `if` here: a manual run rehearses it.
+      - name: Pack the release assets
+        run: |
+          pnpm pack --pack-destination release-assets
+          cd release-assets
+          sha256sum *.tgz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       # Authentication is passed in the environment, not through any .npmrc.
       # `pnpm_config_//<host>/:_authToken` encodes the registry in the variable
       # *name*, so the credential cannot be redirected to another host by
@@ -141,7 +152,9 @@ jobs:
 
       - name: Create the GitHub Release
         if: github.event_name == 'push'
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md --verify-tag
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/*.tgz release-assets/SHA256SUMS.txt \
+            --title "$GITHUB_REF_NAME" --notes-file release-notes.md --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

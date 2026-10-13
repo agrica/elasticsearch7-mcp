@@ -69,6 +69,16 @@ tag disagrees with `package.json`, or when the hardcoded `McpServer` version in
 had before. Running the workflow manually (`workflow_dispatch`) rehearses everything as
 a dry run.
 
+The GitHub Release also carries the package tarball (`agrica-elasticsearch7-mcp-x.y.z.tgz`,
+from `pnpm pack`) and its `SHA256SUMS.txt`. Release assets of a public repository
+download without a token, so this is the install path for a machine that has no
+`read:packages` token — the README documents it.
+
+`.github/dependabot.yml` opens weekly update pull requests for the npm dependencies
+(read from `pnpm-lock.yaml`) and the GitHub Actions. It ignores major updates of
+`@elastic/elasticsearch` — see "Elasticsearch version: 7.x, deliberately" below — and of
+`@types/node`, which moves with `.nvmrc`. Keep those two ignore rules.
+
 To cut a release: bump `version` in `package.json` **and** the `McpServer` version in
 `src/server.ts` (currently `0.4.1` in both — the release guard fails if they diverge),
 commit, then `git tag vx.y.z && git push origin vx.y.z`. `secrets.GITHUB_TOKEN` covers
